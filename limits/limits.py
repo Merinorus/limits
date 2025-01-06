@@ -121,6 +121,12 @@ class RateLimitItem(metaclass=RateLimitItemMeta):
 
         return f"{self.namespace}/{remainder}"
 
+    def previous_key_for(self, *identifiers: str) -> str:
+        """Constructs the previous key for the current limit and any additional
+        identifiers provided. Used for approximated moving window strategy only.
+        """
+        return f"{self.key_for(*identifiers)}/prev"
+
     def __eq__(self, other: object) -> bool:
         if isinstance(other, RateLimitItem):
             return (

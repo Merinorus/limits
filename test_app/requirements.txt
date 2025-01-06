@@ -1,0 +1,4 @@
+fastapi
+uvicorn
+slowapi @ git+https://github.com/merinorus/slowapi.git@test-limits
+-e /home/antoine/git/limits
