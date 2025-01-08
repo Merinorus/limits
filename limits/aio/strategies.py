@@ -185,7 +185,7 @@ class FixedWindowRateLimiter(RateLimiter):
         return WindowStats(reset, remaining)
 
 
-class ApproximatedMovingWindowRateLimiter(RateLimiter):
+class SlidingWindowCounterRateLimiter(RateLimiter):
     """
     TODO doc
 
@@ -209,7 +209,7 @@ class ApproximatedMovingWindowRateLimiter(RateLimiter):
             0, await self.storage.get_expiry(item.key_for(*identifiers)) - time.time()
         )
 
-        approximated_count = ceil(
+        approximated_count = round(
             previous_count
             * (current_window_expire_in - item.get_expiry())
             / item.get_expiry()
@@ -239,9 +239,10 @@ class ApproximatedMovingWindowRateLimiter(RateLimiter):
                 "Current window time elapsed, move the counter to the previous window."
             )
             amount = await self.storage.get(item.key_for(*identifiers))
+            await self.storage.clear(item.previous_key_for(*identifiers))
             await self.storage.incr(
                 item.previous_key_for(*identifiers),
-                expiry=ceil(current_window_expire_in),
+                expiry=min(1, ceil(current_window_expire_in)),
                 amount=amount,
             )
             await self.storage.clear(item.key_for(*identifiers))
@@ -253,7 +254,7 @@ class ApproximatedMovingWindowRateLimiter(RateLimiter):
                 await self.storage.get_expiry(item.previous_key_for(*identifiers))
                 - time.time(),
             )
-            expiry = item.get_expiry() + ceil(previous_windows_expire_in)
+            expiry = min(1, item.get_expiry() + ceil(previous_windows_expire_in))
         else:
             expiry = item.get_expiry() * 2
 
@@ -344,7 +345,7 @@ class FixedWindowElasticExpiryRateLimiter(FixedWindowRateLimiter):
 
 
 STRATEGIES = {
-    "approximated-moving-window": ApproximatedMovingWindowRateLimiter,
+    "sliding-window-counter": SlidingWindowCounterRateLimiter,
     "fixed-window": FixedWindowRateLimiter,
     "fixed-window-elastic-expiry": FixedWindowElasticExpiryRateLimiter,
     "moving-window": MovingWindowRateLimiter,

@@ -212,3 +212,42 @@ class MemcachedStorage(Storage):
 
     def reset(self) -> Optional[int]:
         raise NotImplementedError
+
+    # def shift_window_if_needed(self) -> tuple[int, float, int, float]:
+
+    # cas(current) -> value, expiry, token
+
+    # current_expires_in
+    # current_amount
+
+    # # BEGIN ATOMIC OPERATION #1
+    # current_expires_in = max(
+    #     0, self.storage.get_expiry(item.key_for(*identifiers)) - time.time()
+    # )
+    # # print(f"Current window expires in {current_expires_in} seconds")
+    # if (
+    #     current_expires_in > 0
+    #     and current_expires_in <= item.get_expiry()
+    # ):
+    #     # Current window time elapsed, move the counter to the previous window.
+    #     print(
+    #         "Current window time elapsed, move the counter to the previous window."
+    #     )
+    #     amount = self.storage.get(item.key_for(*identifiers))
+    #     if item.get_expiry() <= 1:
+    #         # Special case when we use a 1-second rate limiter
+    #         # Since the expiry of the previous counter is set to 1 second,
+    #         # It leads to higher apprxomation than expected.
+    #         # So in this case only we may lower the counter
+    #         # This would not happen with expiry set in milliseconds
+    #         # (eg: redis supports this, memcached and this lib don't)
+    #         # So we just approximate for all implementations.
+    #         amount = round(amount * current_expires_in)
+    #         print(f"amount rounded to {amount} before moving counter")
+    #     self.storage.incr(
+    #         item.previous_key_for(*identifiers),
+    #         expiry=max(1, round(current_expires_in)),
+    #         amount=amount,
+    #     )
+    #     self.storage.clear(item.key_for(*identifiers))
+    # # END ATOMIC OPERATION #1

@@ -12,8 +12,15 @@ from limits.strategies import (
     FixedWindowElasticExpiryRateLimiter,
     FixedWindowRateLimiter,
     MovingWindowRateLimiter,
+    SlidingWindowCounterRateLimiter,
 )
-from tests.utils import all_storage, fixed_start, moving_window_storage, window
+from tests.utils import (
+    all_storage,
+    fixed_start,
+    moving_window_storage,
+    sliding_window_counter_storage,
+    window,
+)
 
 
 class TestWindow:
@@ -88,6 +95,43 @@ class TestWindow:
         assert limiter.get_window_stats(limit, "k2").reset_time == pytest.approx(
             end + 2, 1e-2
         )
+        assert not limiter.hit(limit, "k2", cost=6)
+
+    @sliding_window_counter_storage
+    @fixed_start
+    def test_sliding_window_counter(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerSecond(10, 2)
+        with window(1) as (start, end):
+            assert all([limiter.hit(limit) for _ in range(0, 10)])
+        assert not limiter.hit(limit)
+        assert limiter.get_window_stats(limit).remaining == 0
+        assert limiter.get_window_stats(limit).reset_time == pytest.approx(
+            start + 2, 1e-2
+        )
+
+    @sliding_window_counter_storage
+    @fixed_start
+    def test_sliding_window_counter_empty_stats(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerSecond(10, 2)
+        assert limiter.get_window_stats(limit).remaining == 10
+        assert limiter.get_window_stats(limit).reset_time == pytest.approx(
+            time.time(), 1e-2
+        )
+
+    @sliding_window_counter_storage
+    @fixed_start
+    def test_sliding_window_counter_multiple_cost(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerMinute(10, 2)
+        assert not limiter.hit(limit, "k1", cost=11)
+        assert limiter.hit(limit, "k2", cost=5)
+        assert limiter.get_window_stats(limit, "k2").remaining == 5
+        assert not limiter.test(limit, "k2", cost=6)
         assert not limiter.hit(limit, "k2", cost=6)
 
     @moving_window_storage
@@ -184,6 +228,19 @@ class TestWindow:
     def test_test_fixed_window(self, uri, args, fixture):
         storage = storage_from_string(uri, **args)
         limiter = FixedWindowRateLimiter(storage)
+        limit = RateLimitItemPerHour(2, 1)
+        assert limiter.hit(limit)
+        assert limiter.test(limit)
+        assert limiter.hit(limit)
+        assert not limiter.test(limit)
+        assert not limiter.hit(limit)
+
+    @sliding_window_counter_storage
+    @fixed_start
+    @pytest.mark.flaky
+    def test_test_sliding_window_counter(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerHour(2, 1)
         assert limiter.hit(limit)
         assert limiter.test(limit)
