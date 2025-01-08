@@ -15,6 +15,7 @@ from tests.utils import (
     async_all_storage,
     async_moving_window_storage,
     moving_window_storage,
+    sliding_window_counter_storage,
 )
 
 
@@ -24,6 +25,28 @@ class TestConcurrency:
     def test_fixed_window(self, uri, args, fixture):
         storage = storage_from_string(uri, **args)
         limiter = limits.strategies.FixedWindowRateLimiter(storage)
+        limit = RateLimitItemPerMinute(5)
+
+        [limiter.hit(limit, uuid4().hex) for _ in range(50)]
+
+        key = uuid4().hex
+        hits = []
+
+        def hit():
+            time.sleep(random.random())
+            if limiter.hit(limit, key):
+                hits.append(None)
+
+        threads = [threading.Thread(target=hit) for _ in range(50)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+
+        assert len(hits) == 5
+        
+    @sliding_window_counter_storage
+    def test_sliding_window_counter(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = limits.strategies.SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerMinute(5)
 
         [limiter.hit(limit, uuid4().hex) for _ in range(50)]

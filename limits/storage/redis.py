@@ -8,7 +8,7 @@ from packaging.version import Version
 from limits.typing import Optional, RedisClient, ScriptP, Tuple, Type, Union
 
 from ..util import get_package_data
-from .base import MovingWindowSupport, Storage
+from .base import MovingWindowSupport, SlidingWindowCounterSupport, Storage
 
 if TYPE_CHECKING:
     import redis
@@ -23,9 +23,13 @@ class RedisInteractor:
     )
     SCRIPT_CLEAR_KEYS = get_package_data(f"{RES_DIR}/clear_keys.lua")
     SCRIPT_INCR_EXPIRE = get_package_data(f"{RES_DIR}/incr_expire.lua")
+    SCRIPT_SHIFT_WINDOW_IF_NEEDED = get_package_data(
+        f"{RES_DIR}/shift_window_if_needed.lua"
+    )
 
     lua_moving_window: ScriptP[Tuple[int, int]]
     lua_acquire_window: ScriptP[bool]
+    lua_shift_window_if_needed: ScriptP[Tuple[int, float, int, float]]
 
     PREFIX = "LIMITS"
 
@@ -47,6 +51,30 @@ class RedisInteractor:
             return float(window[0]), window[1]
 
         return timestamp, 0
+
+    def shift_window_if_needed(
+        self, previous_key: str, current_key: str, expiry: int
+    ) -> tuple[int, float, int, float]:
+        previous_key = self.prefixed_key(previous_key)
+        current_key = self.prefixed_key(current_key)
+        if window := self.lua_shift_window_if_needed(
+            [previous_key, current_key], [expiry]
+        ):
+            previous_count, previous_expires_in, current_count, current_expires_in = (
+                int(window[0] or 0),
+                max(0, float(window[1] or 0)) / 1000,
+                int(window[2] or 0),
+                max(0, float(window[3] or 0)) / 1000,
+            )
+            # print(
+            #     f"{previous_count}, {previous_expires_in}, {current_count}, {current_expires_in}"
+            # )
+            return (
+                previous_count,
+                previous_expires_in,
+                current_count,
+                current_expires_in,
+            )
 
     def _incr(
         self,
@@ -130,7 +158,9 @@ class RedisInteractor:
             return False
 
 
-class RedisStorage(RedisInteractor, Storage, MovingWindowSupport):
+class RedisStorage(
+    RedisInteractor, Storage, MovingWindowSupport, SlidingWindowCounterSupport
+):
     """
     Rate limit storage with redis as backend.
 
@@ -190,6 +220,9 @@ class RedisStorage(RedisInteractor, Storage, MovingWindowSupport):
         self.lua_clear_keys = self.storage.register_script(self.SCRIPT_CLEAR_KEYS)
         self.lua_incr_expire = self.storage.register_script(
             RedisStorage.SCRIPT_INCR_EXPIRE
+        )
+        self.lua_shift_window_if_needed = self.storage.register_script(
+            RedisStorage.SCRIPT_SHIFT_WINDOW_IF_NEEDED
         )
 
     def incr(

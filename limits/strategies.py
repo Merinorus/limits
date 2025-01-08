@@ -4,8 +4,9 @@ Rate limiting strategies
 
 import time
 from abc import ABCMeta, abstractmethod
-from math import ceil
 from typing import Dict, Type, Union, cast
+
+from limits.storage.base import SlidingWindowCounterSupport
 
 from .limits import RateLimitItem
 from .storage import MovingWindowSupport, Storage, StorageTypes
@@ -175,35 +176,60 @@ class FixedWindowRateLimiter(RateLimiter):
         return WindowStats(reset, remaining)
 
 
-class ApproximatedMovingWindowRateLimiter(RateLimiter):
+class SlidingWindowCounterRateLimiter(RateLimiter):
     """
     TODO doc
 
     Use two fixed windows: the current one and the previous one.
     """
 
-    def get_approximated_count(self, item: RateLimitItem, *identifiers: str) -> int:
-        """
-        Get the approximated count by averaging the current window and the previous one,
-        depending on how much time passed since the new window has been created.
-        The result is rounded up to the next whole number.
+    def __init__(self, storage: StorageTypes):
+        if not hasattr(storage, "shift_window_if_needed"):
+            raise NotImplementedError(
+                "SlidingWindowCounterRateLimiting is not implemented for storage "
+                "of type %s" % storage.__class__
+            )
+        super().__init__(storage)
 
-        Args:
-            item (RateLimitItem): The rate limit item
+    def _weighted_count(
+        self,
+        item: RateLimitItem,
+        previous_count: int,
+        previous_expires_in: float,
+        current_count: int,
+    ):
+        """Return the approximated by weighting the previous window count and adding the current window count."""
+        # print(
+        #     f"_weighted_count: {type(item)}, {type(previous_count)}, {type(previous_expires_in)}, {type(current_count)}"
+        # )
+        return round(
+            previous_count * previous_expires_in / item.get_expiry() + current_count
+        )
+    
+    def _current_key_for(self, item: RateLimitItem, *identifiers: str):
         """
-        current_count = self.storage.get(item.key_for(*identifiers))
-        previous_count = self.storage.get(item.previous_key_for(*identifiers))
-        current_window_expire_in = max(
-            0, self.storage.get_expiry(item.key_for(*identifiers)) - time.time()
-        )
+        Return the current window's storage key.
+        
+        Contrary to other strategies that have one key per rate limit item,
+        this strategy has two keys per rate limit item than must be on the same machine.
+        To keep the current key and the previous key on the same Redis cluster node,
+        curvy braces are added.
+        
+        Eg: "{constructed_key}"
+        """
+        return f"{{{item.key_for(*identifiers)}}}"
+    
+    def _previous_key_for(self, item: RateLimitItem, *identifiers: str):
+        """
+        Return the previous window's storage key.
+        
+        Curvy braces are added on the common pattern with the current window's key,
+        so the current and the previous key are stored on the same Redis cluster node.
+        
+        Eg: "{constructed_key}/-1"
+        """
+        return f"{self._current_key_for(item, *identifiers)}/-1"
 
-        approximated_count = ceil(
-            previous_count
-            * (current_window_expire_in - item.get_expiry())
-            / item.get_expiry()
-            + current_count
-        )
-        return approximated_count
 
     def hit(self, item: RateLimitItem, *identifiers: str, cost: int = 1) -> bool:
         """
@@ -214,61 +240,51 @@ class ApproximatedMovingWindowRateLimiter(RateLimiter):
          instance of the limit
         :param cost: The cost of this hit, default 1
         """
-        current_window_expire_in = max(
-            0, self.storage.get_expiry(item.key_for(*identifiers)) - time.time()
+        # print("- HIT")
+        # BEGIN ATOMIC OPERATION #1
+        previous_count, previous_expires_in, current_count, current_expires_in = cast(
+            SlidingWindowCounterSupport, self.storage
+        ).shift_window_if_needed(
+            self._previous_key_for(item, *identifiers),
+            self._current_key_for(item, *identifiers),
+            item.get_expiry(),
         )
-        # print(f"Current window expires in {current_window_expire_in} seconds")
+        # print(
+        #     f"{type(previous_count)}, {type(previous_expires_in)}, {type(current_count)}, {type(current_expires_in)}"
+        # )
+        # END   ATOMIC OPERATION #1
+
+        # BEGIN ATOMIC OPERATION #2
+
         if (
-            current_window_expire_in > 0
-            and current_window_expire_in <= item.get_expiry()
+            self._weighted_count(
+                item, previous_count, previous_expires_in, current_count
+            )
+            <= item.amount
         ):
-            # Current window time elapsed, move the counter to the previous window.
-            print(
-                "Current window time elapsed, move the counter to the previous window."
+            current_count = self.storage.incr(
+                self._current_key_for(item, *identifiers), item.get_expiry() * 2, elastic_expiry=False, amount=cost
             )
-            self.storage.incr(
-                item.previous_key_for(*identifiers),
-                expiry=ceil(current_window_expire_in),
-                amount=self.storage.get(item.key_for(*identifiers)),
+        # END   ATOMIC OPERATION #2
+
+        # print(f"previous window expires: {previous_expires_in}")
+        # print(f"current  window expires: {current_expires_in}")
+        # print(
+        #     f"previous window counter: {self.storage.get(self._previous_key_for(item, *identifiers))}"
+        # )
+        # print(
+        #     f"current  window counter: {self.storage.get(self._current_key_for(item, *identifiers))}"
+        # )
+        # print(
+        #     f"Approximated    counter: {self._weighted_count(item, previous_count, previous_expires_in, current_count)}"
+        # )
+
+        return (
+            self._weighted_count(
+                item, previous_count, previous_expires_in, current_count
             )
-            self.storage.clear(item.key_for(*identifiers))
-
-        has_previous_window = self.storage.get(item.previous_key_for(*identifiers))
-        if has_previous_window:
-            previous_windows_expire_in = max(
-                0,
-                self.storage.get_expiry(item.previous_key_for(*identifiers))
-                - time.time(),
-            )
-            expiry = item.get_expiry() + ceil(previous_windows_expire_in)
-        else:
-            expiry = item.get_expiry() * 2
-
-        self.storage.incr(
-            item.key_for(*identifiers), expiry, elastic_expiry=False, amount=cost
+            <= item.amount
         )
-
-        print("Counter incremented.")
-        previous_window_expire_in = max(
-            0,
-            self.storage.get_expiry(item.previous_key_for(*identifiers)) - time.time(),
-        )
-        current_window_expire_in = max(
-            0, self.storage.get_expiry(item.key_for(*identifiers)) - time.time()
-        )
-        print(f"previous window expires: {previous_window_expire_in}")
-        print(f"current  window expires: {current_window_expire_in}")
-        print(
-            f"previous window counter: {self.storage.get(item.previous_key_for(*identifiers))}"
-        )
-        print(
-            f"current  window counter: {self.storage.get(item.key_for(*identifiers))}"
-        )
-        print(
-            f"Approximated    counter: {self.get_approximated_count(item, *identifiers)}"
-        )
-
-        return self.get_approximated_count(item, *identifiers) <= item.amount
 
     def test(self, item: RateLimitItem, *identifiers: str, cost: int = 1) -> bool:
         """
@@ -279,8 +295,20 @@ class ApproximatedMovingWindowRateLimiter(RateLimiter):
          instance of the limit
         :param cost: The expected cost to be consumed, default 1
         """
-
-        return self.get_approximated_count(item, *identifiers) < item.amount - cost + 1
+        # print("- TEST")
+        previous_count, previous_expires_in, current_count, _ = cast(
+            SlidingWindowCounterSupport, self.storage
+        ).shift_window_if_needed(
+            self._previous_key_for(item, *identifiers),
+            self._current_key_for(item, *identifiers),
+            item.get_expiry(),
+        )
+        return (
+            self._weighted_count(
+                item, previous_count, previous_expires_in, current_count
+            )
+            < item.amount - cost + 1
+        )
 
     def get_window_stats(self, item: RateLimitItem, *identifiers: str) -> WindowStats:
         """
@@ -291,12 +319,24 @@ class ApproximatedMovingWindowRateLimiter(RateLimiter):
          instance of the limit
         :return: (reset time, remaining)
         """
-        reset = self.storage.get_expiry(item.key_for(*identifiers))
+        # print("- GET WINDOW STATS")
+
+        previous_count, previous_expires_in, current_count, current_expires_in = cast(
+            SlidingWindowCounterSupport, self.storage
+        ).shift_window_if_needed(
+            self._previous_key_for(item, *identifiers),
+            self._current_key_for(item, *identifiers),
+            item.get_expiry(),
+        )
         remaining = max(
-            0, item.amount - self.get_approximated_count(item, *identifiers)
+            0,
+            item.amount
+            - self._weighted_count(
+                item, previous_count, previous_expires_in, current_count
+            ),
         )
 
-        return WindowStats(reset, remaining)
+        return WindowStats(time.time() + current_expires_in, remaining)
 
 
 class FixedWindowElasticExpiryRateLimiter(FixedWindowRateLimiter):
@@ -326,14 +366,14 @@ class FixedWindowElasticExpiryRateLimiter(FixedWindowRateLimiter):
 
 
 KnownStrategy = Union[
-    Type[ApproximatedMovingWindowRateLimiter],
+    Type[SlidingWindowCounterRateLimiter],
     Type[FixedWindowRateLimiter],
     Type[FixedWindowElasticExpiryRateLimiter],
     Type[MovingWindowRateLimiter],
 ]
 
 STRATEGIES: Dict[str, KnownStrategy] = {
-    "approximated-moving-window": ApproximatedMovingWindowRateLimiter,
+    "sliding-window-counter": SlidingWindowCounterRateLimiter,
     "fixed-window": FixedWindowRateLimiter,
     "fixed-window-elastic-expiry": FixedWindowElasticExpiryRateLimiter,
     "moving-window": MovingWindowRateLimiter,

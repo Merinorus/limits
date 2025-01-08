@@ -6,12 +6,17 @@ import pytest
 import limits.aio.strategies
 from limits import RateLimitItemPerMinute
 from limits.storage import storage_from_string
-from limits.strategies import FixedWindowRateLimiter, MovingWindowRateLimiter
+from limits.strategies import (
+    FixedWindowRateLimiter,
+    MovingWindowRateLimiter,
+    SlidingWindowCounterRateLimiter,
+)
 from tests.utils import (
     all_storage,
     async_all_storage,
     async_moving_window_storage,
     moving_window_storage,
+    sliding_window_counter_storage,
 )
 
 
@@ -33,6 +38,16 @@ def test_fixed_window(benchmark, uri, args, fixture):
     benchmark(
         functools.partial(
             hit_window, FixedWindowRateLimiter, storage_from_string(uri, **args)
+        )
+    )
+
+
+@sliding_window_counter_storage
+@pytest.mark.benchmark(group="sliding-window-counter")
+def test_sliding_window_counter(benchmark, uri, args, fixture):
+    benchmark(
+        functools.partial(
+            hit_window, SlidingWindowCounterRateLimiter, storage_from_string(uri, **args)
         )
     )
 

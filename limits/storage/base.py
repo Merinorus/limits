@@ -171,3 +171,44 @@ class MovingWindowSupport(ABC):
         :return: (start of window, number of acquired entries)
         """
         raise NotImplementedError
+
+
+class SlidingWindowCounterSupport(ABC):
+    """
+    Abstract base for storages that intend to support
+    the sliding window counter strategy
+    """
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> SlidingWindowCounterSupport:  # type: ignore[misc]
+        inst = super().__new__(cls)
+
+        for method in {
+            "shift_window_if_needed",
+        }:
+            setattr(
+                inst,
+                method,
+                _wrap_errors(cast(Storage, inst), getattr(inst, method)),
+            )
+
+        return inst
+
+    @abstractmethod
+    def shift_window_if_needed(
+        self, previous_key, current_key, expiry
+    ) -> tuple[int, float, int, float]:
+        """
+        Shift the current window to the previous window if it expired.
+
+        :param current_window_key: rate limit key
+        :param previous_window_key: expiry of entry
+        :param expiry: expiry of entry
+        :return: (start of window, number of acquired entries)
+
+        Return a tuple[int, float, int_ float] with the following information:
+        - previous window counter (int)
+        - previous window TTL (float)
+        - current window counter (int)
+        - current window TTL (float)
+        """
+        raise NotImplementedError

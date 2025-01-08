@@ -3,7 +3,11 @@ import time
 from collections import Counter
 
 import limits.typing
-from limits.storage.base import MovingWindowSupport, Storage
+from limits.storage.base import (
+    MovingWindowSupport,
+    SlidingWindowCounterSupport,
+    Storage,
+)
 from limits.typing import Dict, List, Optional, Tuple, Type, Union
 
 
@@ -14,7 +18,7 @@ class LockableEntry(threading._RLock):  # type: ignore
         super().__init__()
 
 
-class MemoryStorage(Storage, MovingWindowSupport):
+class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
     """
     rate limit storage using :class:`collections.Counter`
     as an in memory storage for fixed and elastic window strategies,
@@ -58,7 +62,7 @@ class MemoryStorage(Storage, MovingWindowSupport):
             self.timer.start()
 
     def incr(
-        self, key: str, expiry: int, elastic_expiry: bool = False, amount: int = 1
+        self, key: str, expiry: float, elastic_expiry: bool = False, amount: int = 1
     ) -> int:
         """
         increments the counter for a given rate limit key
@@ -128,6 +132,13 @@ class MemoryStorage(Storage, MovingWindowSupport):
 
         return self.expirations.get(key, time.time())
 
+    def get_ttl(self, key: str) -> float:
+        """
+        :param key: the key to get the TTL for
+        """
+        now = time.time()
+        return max(0, self.expirations.get(key, now) - now)
+
     def get_num_acquired(self, key: str, expiry: int) -> int:
         """
         returns the number of entries already acquired
@@ -160,6 +171,23 @@ class MemoryStorage(Storage, MovingWindowSupport):
                 return item.atime, acquired
 
         return timestamp, acquired
+
+    def shift_window_if_needed(
+        self, previous_key: str, current_key: str, expiry: int
+    ) -> tuple[int, float, int, float]:
+        current_ttl = self.get_ttl(current_key)
+        if current_ttl and current_ttl < expiry:
+            self.clear(previous_key)
+            self.incr(previous_key, current_ttl, amount=self.storage.get(current_key))
+            self.clear(current_key)
+            # The current window has been reset, just set the right expiration time
+            self.incr(current_key, expiry + current_ttl, amount=0)
+        return (
+            self.get(previous_key),
+            self.get_ttl(previous_key),
+            self.get(current_key),
+            self.get_ttl(current_key),
+        )
 
     def check(self) -> bool:
         """
