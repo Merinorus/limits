@@ -205,6 +205,20 @@ sliding_window_counter_storage = pytest.mark.parametrize(
             id="redis",
         ),
         pytest.param(
+            "memcached://localhost:22122",
+            {},
+            lf("memcached"),
+            marks=[pytest.mark.memcached, pytest.mark.flaky],
+            id="memcached",
+        ),
+        pytest.param(
+            "memcached://localhost:22122,localhost:22123",
+            {},
+            lf("memcached_cluster"),
+            marks=[pytest.mark.memcached, pytest.mark.flaky],
+            id="memcached-cluster",
+        ),
+        pytest.param(
             "redis+cluster://localhost:7001/",
             {},
             lf("redis_cluster"),
