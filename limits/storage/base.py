@@ -182,9 +182,7 @@ class SlidingWindowCounterSupport(ABC):
     def __new__(cls, *args: Any, **kwargs: Any) -> SlidingWindowCounterSupport:  # type: ignore[misc]
         inst = super().__new__(cls)
 
-        for method in {
-            "shift_window_if_needed",
-        }:
+        for method in {"acquire_sliding_window_entry", "get_sliding_window"}:
             setattr(
                 inst,
                 method,
@@ -194,16 +192,32 @@ class SlidingWindowCounterSupport(ABC):
         return inst
 
     @abstractmethod
-    def shift_window_if_needed(
-        self, previous_key, current_key, expiry
+    def acquire_sliding_window_entry(
+        self,
+        previous_key: str,
+        current_key: str,
+        limit: int,
+        expiry: int,
+        amount: int = 1,
+    ) -> bool:
+        """
+        Acquire an entry. Shift the current window to the previous window if it expired.
+        :param current_window_key: current window key
+        :param previous_window_key: previous window key
+        :param limit: amount of entries allowed
+        :param expiry: expiry of the entry
+        :param amount: the number of entries to acquire
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_sliding_window(
+        self, previous_key, current_key
     ) -> tuple[int, float, int, float]:
         """
-        Shift the current window to the previous window if it expired.
+        Return the previous and current window information.
 
-        :param current_window_key: rate limit key
-        :param previous_window_key: expiry of entry
-        :param expiry: expiry of entry
-        :return: (start of window, number of acquired entries)
+        This method should be implemented by the inherited classes if a more performant solution is available.
 
         Return a tuple[int, float, int_ float] with the following information:
         - previous window counter (int)

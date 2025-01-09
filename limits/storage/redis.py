@@ -23,13 +23,16 @@ class RedisInteractor:
     )
     SCRIPT_CLEAR_KEYS = get_package_data(f"{RES_DIR}/clear_keys.lua")
     SCRIPT_INCR_EXPIRE = get_package_data(f"{RES_DIR}/incr_expire.lua")
-    SCRIPT_SHIFT_WINDOW_IF_NEEDED = get_package_data(
-        f"{RES_DIR}/shift_window_if_needed.lua"
+
+    SCRIPT_SLIDING_WINDOW = get_package_data(f"{RES_DIR}/sliding_window.lua")
+    SCRIPT_ACQUIRE_SLIDING_WINDOW = get_package_data(
+        f"{RES_DIR}/acquire_sliding_window.lua"
     )
 
     lua_moving_window: ScriptP[Tuple[int, int]]
-    lua_acquire_window: ScriptP[bool]
-    lua_shift_window_if_needed: ScriptP[Tuple[int, float, int, float]]
+    lua_acquire_moving_window: ScriptP[bool]
+    lua_sliding_window: ScriptP[Tuple[int, float, int, float]]
+    lua_acquire_sliding_window: ScriptP[bool]
 
     PREFIX = "LIMITS"
 
@@ -52,12 +55,39 @@ class RedisInteractor:
 
         return timestamp, 0
 
-    def shift_window_if_needed(
+    def get_sliding_window(
+        self, previous_key: str, current_key: str
+    ) -> Tuple[int, float, int, float]:
+        """
+        returns the starting point and the number of entries in the moving
+        window
+
+        :param key: rate limit key
+        :param expiry: expiry of entry
+        :return: (start of window, number of acquired entries)
+        """
+        previous_key = self.prefixed_key(previous_key)
+        current_key = self.prefixed_key(current_key)
+        if window := self.lua_sliding_window([previous_key, current_key]):
+            previous_count, previous_expires_in, current_count, current_expires_in = (
+                int(window[0] or 0),
+                max(0, float(window[1] or 0)) / 1000,
+                int(window[2] or 0),
+                max(0, float(window[3] or 0)) / 1000,
+            )
+        return (
+            previous_count,
+            previous_expires_in,
+            current_count,
+            current_expires_in,
+        )
+
+    def sliding_window_shift(
         self, previous_key: str, current_key: str, expiry: int
     ) -> tuple[int, float, int, float]:
         previous_key = self.prefixed_key(previous_key)
         current_key = self.prefixed_key(current_key)
-        if window := self.lua_shift_window_if_needed(
+        if window := self.lua_sliding_window_shift(
             [previous_key, current_key], [expiry]
         ):
             previous_count, previous_expires_in, current_count, current_expires_in = (
@@ -134,8 +164,33 @@ class RedisInteractor:
         """
         key = self.prefixed_key(key)
         timestamp = time.time()
-        acquired = self.lua_acquire_window([key], [timestamp, limit, expiry, amount])
+        acquired = self.lua_acquire_moving_window(
+            [key], [timestamp, limit, expiry, amount]
+        )
 
+        return bool(acquired)
+
+    def _acquire_sliding_window_entry(
+        self,
+        previous_key: str,
+        current_key: str,
+        limit: int,
+        expiry: int,
+        amount: int = 1,
+    ) -> bool:
+        """
+        Acquire an entry. Shift the current window to the previous window if it expired.
+        :param current_window_key: current window key
+        :param previous_window_key: previous window key
+        :param limit: amount of entries allowed
+        :param expiry: expiry of the entry
+        :param amount: the number of entries to acquire
+        """
+        previous_key = self.prefixed_key(previous_key)
+        current_key = self.prefixed_key(current_key)
+        acquired = self.lua_acquire_sliding_window(
+            [previous_key, current_key], [limit, expiry, amount]
+        )
         return bool(acquired)
 
     def _get_expiry(self, key: str, connection: RedisClient) -> float:
@@ -214,15 +269,18 @@ class RedisStorage(
 
     def initialize_storage(self, _uri: str) -> None:
         self.lua_moving_window = self.storage.register_script(self.SCRIPT_MOVING_WINDOW)
-        self.lua_acquire_window = self.storage.register_script(
+        self.lua_acquire_moving_window = self.storage.register_script(
             self.SCRIPT_ACQUIRE_MOVING_WINDOW
         )
         self.lua_clear_keys = self.storage.register_script(self.SCRIPT_CLEAR_KEYS)
         self.lua_incr_expire = self.storage.register_script(
             RedisStorage.SCRIPT_INCR_EXPIRE
         )
-        self.lua_shift_window_if_needed = self.storage.register_script(
-            RedisStorage.SCRIPT_SHIFT_WINDOW_IF_NEEDED
+        self.lua_sliding_window = self.storage.register_script(
+            RedisStorage.SCRIPT_SLIDING_WINDOW
+        )
+        self.lua_acquire_sliding_window = self.storage.register_script(
+            RedisStorage.SCRIPT_ACQUIRE_SLIDING_WINDOW
         )
 
     def incr(
@@ -265,6 +323,26 @@ class RedisStorage(
         """
 
         return super()._acquire_entry(key, limit, expiry, self.storage, amount)
+
+    def acquire_sliding_window_entry(
+        self,
+        previous_key: str,
+        current_key: str,
+        limit: int,
+        expiry: int,
+        amount: int = 1,
+    ) -> bool:
+        """
+        Acquire an entry. Shift the current window to the previous window if it expired.
+        :param current_window_key: current window key
+        :param previous_window_key: previous window key
+        :param limit: amount of entries allowed
+        :param expiry: expiry of the entry
+        :param amount: the number of entries to acquire
+        """
+        return self._acquire_sliding_window_entry(
+            previous_key, current_key, limit, expiry, amount
+        )
 
     def get_expiry(self, key: str) -> float:
         """

@@ -172,9 +172,35 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
 
         return timestamp, acquired
 
-    def shift_window_if_needed(
-        self, previous_key: str, current_key: str, expiry: int
-    ) -> tuple[int, float, int, float]:
+    # def sliding_window_shift(
+    #     self, previous_key: str, current_key: str, expiry: int
+    # ) -> tuple[int, float, int, float]:
+    #     current_ttl = self.get_ttl(current_key)
+    #     if current_ttl and current_ttl < expiry:
+    #         self.clear(previous_key)
+    #         self.incr(previous_key, current_ttl, amount=self.storage.get(current_key))
+    #         self.clear(current_key)
+    #         # The current window has been reset, just set the right expiration time
+    #         self.incr(current_key, expiry + current_ttl, amount=0)
+    #     return (
+    #         self.get(previous_key),
+    #         self.get_ttl(previous_key),
+    #         self.get(current_key),
+    #         self.get_ttl(current_key),
+    #     )
+
+    def acquire_sliding_window_entry(
+        # self, previous_key: str, current_key: str, expiry: int
+        self,
+        previous_key: str,
+        current_key: str,
+        limit: int,
+        expiry: int,
+        amount: int = 1,
+    ) -> bool:
+        if amount > limit:
+            return False
+
         current_ttl = self.get_ttl(current_key)
         if current_ttl and current_ttl < expiry:
             self.clear(previous_key)
@@ -182,6 +208,35 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
             self.clear(current_key)
             # The current window has been reset, just set the right expiration time
             self.incr(current_key, expiry + current_ttl, amount=0)
+
+        weighted_count = self.get(previous_key) * self.get_ttl(
+            previous_key
+        ) / expiry + self.get(current_key)
+
+        if weighted_count + amount > limit:
+            return False
+
+        self.incr(current_key, expiry * 2, amount=amount)
+        return True
+        # local weighted_count = previous_count * previous_ttl / expiry + current_count
+        # return (
+        #     self.get(previous_key),
+        #     self.get_ttl(previous_key),
+        #     self.get(current_key),
+        #     self.get_ttl(current_key),
+        # )
+
+    def get_sliding_window(
+        self, previous_key: str, current_key: str
+    ) -> Tuple[int, float, int, float]:
+        """
+        returns the starting point and the number of entries in the moving
+        window
+
+        :param key: rate limit key
+        :param expiry: expiry of entry
+        :return: (start of window, number of acquired entries)
+        """
         return (
             self.get(previous_key),
             self.get_ttl(previous_key),

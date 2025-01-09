@@ -184,7 +184,9 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
     """
 
     def __init__(self, storage: StorageTypes):
-        if not hasattr(storage, "shift_window_if_needed"):
+        if not hasattr(storage, "get_sliding_window") or not hasattr(
+            storage, "acquire_sliding_window_entry"
+        ):
             raise NotImplementedError(
                 "SlidingWindowCounterRateLimiting is not implemented for storage "
                 "of type %s" % storage.__class__
@@ -199,37 +201,33 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         current_count: int,
     ):
         """Return the approximated by weighting the previous window count and adding the current window count."""
-        # print(
-        #     f"_weighted_count: {type(item)}, {type(previous_count)}, {type(previous_expires_in)}, {type(current_count)}"
-        # )
         return round(
             previous_count * previous_expires_in / item.get_expiry() + current_count
         )
-    
+
     def _current_key_for(self, item: RateLimitItem, *identifiers: str):
         """
         Return the current window's storage key.
-        
+
         Contrary to other strategies that have one key per rate limit item,
         this strategy has two keys per rate limit item than must be on the same machine.
         To keep the current key and the previous key on the same Redis cluster node,
         curvy braces are added.
-        
+
         Eg: "{constructed_key}"
         """
         return f"{{{item.key_for(*identifiers)}}}"
-    
+
     def _previous_key_for(self, item: RateLimitItem, *identifiers: str):
         """
         Return the previous window's storage key.
-        
+
         Curvy braces are added on the common pattern with the current window's key,
         so the current and the previous key are stored on the same Redis cluster node.
-        
+
         Eg: "{constructed_key}/-1"
         """
         return f"{self._current_key_for(item, *identifiers)}/-1"
-
 
     def hit(self, item: RateLimitItem, *identifiers: str, cost: int = 1) -> bool:
         """
@@ -240,50 +238,14 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :param cost: The cost of this hit, default 1
         """
-        # print("- HIT")
-        # BEGIN ATOMIC OPERATION #1
-        previous_count, previous_expires_in, current_count, current_expires_in = cast(
+        return cast(
             SlidingWindowCounterSupport, self.storage
-        ).shift_window_if_needed(
+        ).acquire_sliding_window_entry(
             self._previous_key_for(item, *identifiers),
             self._current_key_for(item, *identifiers),
+            item.amount,
             item.get_expiry(),
-        )
-        # print(
-        #     f"{type(previous_count)}, {type(previous_expires_in)}, {type(current_count)}, {type(current_expires_in)}"
-        # )
-        # END   ATOMIC OPERATION #1
-
-        # BEGIN ATOMIC OPERATION #2
-
-        if (
-            self._weighted_count(
-                item, previous_count, previous_expires_in, current_count
-            )
-            <= item.amount
-        ):
-            current_count = self.storage.incr(
-                self._current_key_for(item, *identifiers), item.get_expiry() * 2, elastic_expiry=False, amount=cost
-            )
-        # END   ATOMIC OPERATION #2
-
-        # print(f"previous window expires: {previous_expires_in}")
-        # print(f"current  window expires: {current_expires_in}")
-        # print(
-        #     f"previous window counter: {self.storage.get(self._previous_key_for(item, *identifiers))}"
-        # )
-        # print(
-        #     f"current  window counter: {self.storage.get(self._current_key_for(item, *identifiers))}"
-        # )
-        # print(
-        #     f"Approximated    counter: {self._weighted_count(item, previous_count, previous_expires_in, current_count)}"
-        # )
-
-        return (
-            self._weighted_count(
-                item, previous_count, previous_expires_in, current_count
-            )
-            <= item.amount
+            cost,
         )
 
     def test(self, item: RateLimitItem, *identifiers: str, cost: int = 1) -> bool:
@@ -295,14 +257,14 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :param cost: The expected cost to be consumed, default 1
         """
-        # print("- TEST")
+
         previous_count, previous_expires_in, current_count, _ = cast(
             SlidingWindowCounterSupport, self.storage
-        ).shift_window_if_needed(
+        ).get_sliding_window(
             self._previous_key_for(item, *identifiers),
             self._current_key_for(item, *identifiers),
-            item.get_expiry(),
         )
+
         return (
             self._weighted_count(
                 item, previous_count, previous_expires_in, current_count
@@ -323,10 +285,9 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
 
         previous_count, previous_expires_in, current_count, current_expires_in = cast(
             SlidingWindowCounterSupport, self.storage
-        ).shift_window_if_needed(
+        ).get_sliding_window(
             self._previous_key_for(item, *identifiers),
             self._current_key_for(item, *identifiers),
-            item.get_expiry(),
         )
         remaining = max(
             0,
