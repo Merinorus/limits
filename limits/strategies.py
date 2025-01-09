@@ -296,7 +296,6 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
                 item, previous_count, previous_expires_in, current_count
             ),
         )
-
         return WindowStats(time.time() + current_expires_in, remaining)
 
 

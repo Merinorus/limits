@@ -85,6 +85,15 @@ class MemcachedClientP(Protocol):
 
     def incr(self, key: str, value: int, noreply: Optional[bool] = False) -> int: ...
 
+    def decr(
+        self,
+        key: str,
+        offset: int,
+        initial_value: int = 0,
+        expiry: Optional[int] = 0,
+        noreply: Optional[bool] = None,
+    ) -> int: ...
+
     def delete(self, key: str, noreply: Optional[bool] = None) -> Optional[bool]: ...
 
     def set(

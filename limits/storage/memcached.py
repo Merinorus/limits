@@ -6,7 +6,7 @@ from types import ModuleType
 from typing import cast
 
 from limits.errors import ConfigurationError
-from limits.storage.base import Storage
+from limits.storage.base import SlidingWindowCounterSupport, Storage
 from limits.typing import (
     Callable,
     List,
@@ -21,7 +21,11 @@ from limits.typing import (
 from limits.util import get_dependency
 
 
-class MemcachedStorage(Storage):
+class SlidingWindowAcquireError(RuntimeError):
+    pass
+
+
+class MemcachedStorage(Storage, SlidingWindowCounterSupport):
     """
     Rate limit storage with memcached as backend.
 
@@ -199,6 +203,13 @@ class MemcachedStorage(Storage):
 
         return float(self.storage.get(key + "/expires") or time.time())
 
+    def get_ttl(self, key: str) -> float:
+        """
+        :param key: the key to get the TTL for
+        """
+        now = time.time()
+        return max(0, float(self.storage.get(key + "/expires", now)) - now)
+
     def check(self) -> bool:
         """
         Check if storage is healthy by calling the ``get`` command
@@ -213,3 +224,70 @@ class MemcachedStorage(Storage):
 
     def reset(self) -> Optional[int]:
         raise NotImplementedError
+
+    def _key_lock_name(self, key):
+        return f"{key}/lock"
+
+    def _acquire_lock(self, key, expiry) -> bool:
+        """
+        Lock acquisition on a specific memcached key. Non blocking (fail fast).
+
+        Return True if the lock was acquired, false otherwise.
+        """
+        return self.storage.add(self._key_lock_name(key), 1, expire=expiry)
+
+    def _release_lock(self, key):
+        """Release the lock on a specific key. Ignore the result."""
+        self.storage.delete(self._key_lock_name(key), noreply=True)
+
+    def acquire_sliding_window_entry(
+        self, previous_key, current_key, limit, expiry, amount=1
+    ):
+        current_count = None
+        current_ttl = int(self.get_ttl(current_key))
+        if current_ttl > 0 and current_ttl < expiry:
+            try:
+                if self._acquire_lock(current_key):
+                    if not self.call_memcached_func(
+                        self.storage.touch, current_key, current_ttl + expiry
+                    ):
+                        if not self.call_memcached_func(
+                            self.storage.add, current_key, 0, expiry * 2
+                        ):
+                            if not self.call_memcached_func(
+                                self.storage.touch, current_key, current_ttl + expiry
+                            ):
+                                raise SlidingWindowAcquireError()
+                    current_count = self.get(current_key)
+                    if not self.call_memcached_func(
+                        self.storage.set, previous_key, current_count, current_ttl
+                    ):
+                        raise SlidingWindowAcquireError()
+                    current_count = self.call_memcached_func(
+                        self.storage.decr, current_key, current_count, 0, expiry * 2
+                    )
+                    self._release_lock()
+            except SlidingWindowAcquireError:
+                self._release_lock(current_key)
+                return False
+        previous_count = self.get(previous_key)
+        previous_ttl = self.get_ttl(previous_key)
+        if current_count is None:
+            current_count = self.get(current_key)
+        weighted_count = previous_count * previous_ttl / expiry + self.get(current_key)
+
+        if weighted_count + amount > limit:
+            return False
+
+        self.incr(current_key, expiry * 2, amount=amount)
+        return True
+
+    def get_sliding_window(
+        self, previous_key, current_key
+    ) -> tuple[int, float, int, float]:
+        return (
+            self.get(previous_key),
+            self.get_ttl(previous_key),
+            self.get(current_key),
+            self.get_ttl(current_key),
+        )
