@@ -47,7 +47,9 @@ def test_fixed_window(benchmark, uri, args, fixture):
 def test_sliding_window_counter(benchmark, uri, args, fixture):
     benchmark(
         functools.partial(
-            hit_window, SlidingWindowCounterRateLimiter, storage_from_string(uri, **args)
+            hit_window,
+            SlidingWindowCounterRateLimiter,
+            storage_from_string(uri, **args),
         )
     )
 

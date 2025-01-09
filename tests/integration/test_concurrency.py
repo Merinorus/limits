@@ -42,7 +42,7 @@ class TestConcurrency:
         [t.join() for t in threads]
 
         assert len(hits) == 5
-        
+
     @sliding_window_counter_storage
     def test_sliding_window_counter(self, uri, args, fixture):
         storage = storage_from_string(uri, **args)
