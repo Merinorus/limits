@@ -68,7 +68,7 @@ class RedisInteractor:
         """
         previous_key = self.prefixed_key(previous_key)
         current_key = self.prefixed_key(current_key)
-        if window := self.lua_sliding_window([previous_key, current_key]):
+        if window := self.lua_sliding_window([previous_key, current_key], []):
             previous_count, previous_expires_in, current_count, current_expires_in = (
                 int(window[0] or 0),
                 max(0, float(window[1] or 0)) / 1000,
@@ -82,29 +82,29 @@ class RedisInteractor:
             current_expires_in,
         )
 
-    def sliding_window_shift(
-        self, previous_key: str, current_key: str, expiry: int
-    ) -> tuple[int, float, int, float]:
-        previous_key = self.prefixed_key(previous_key)
-        current_key = self.prefixed_key(current_key)
-        if window := self.lua_sliding_window_shift(
-            [previous_key, current_key], [expiry]
-        ):
-            previous_count, previous_expires_in, current_count, current_expires_in = (
-                int(window[0] or 0),
-                max(0, float(window[1] or 0)) / 1000,
-                int(window[2] or 0),
-                max(0, float(window[3] or 0)) / 1000,
-            )
-            # print(
-            #     f"{previous_count}, {previous_expires_in}, {current_count}, {current_expires_in}"
-            # )
-            return (
-                previous_count,
-                previous_expires_in,
-                current_count,
-                current_expires_in,
-            )
+    # def sliding_window_shift(
+    #     self, previous_key: str, current_key: str, expiry: int
+    # ) -> tuple[int, float, int, float]:
+    #     previous_key = self.prefixed_key(previous_key)
+    #     current_key = self.prefixed_key(current_key)
+    #     if window := self.lua_sliding_window_shift(
+    #         [previous_key, current_key], [expiry]
+    #     ):
+    #         previous_count, previous_expires_in, current_count, current_expires_in = (
+    #             int(window[0] or 0),
+    #             max(0, float(window[1] or 0)) / 1000,
+    #             int(window[2] or 0),
+    #             max(0, float(window[3] or 0)) / 1000,
+    #         )
+    #         # print(
+    #         #     f"{previous_count}, {previous_expires_in}, {current_count}, {current_expires_in}"
+    #         # )
+    #         return (
+    #             previous_count,
+    #             previous_expires_in,
+    #             current_count,
+    #             current_expires_in,
+    #         )
 
     def _incr(
         self,

@@ -4,6 +4,7 @@ from typing import (
     Awaitable,
     Callable,
     Dict,
+    Iterable,
     List,
     NamedTuple,
     Optional,
@@ -71,9 +72,6 @@ class EmcacheClientP(Protocol):
     ) -> None: ...
 
 
-Key = Union[str, bytes]
-
-
 class MemcachedClientP(Protocol):
     def add(
         self,
@@ -86,7 +84,7 @@ class MemcachedClientP(Protocol):
 
     def get(self, key: str, default: Optional[str] = None) -> bytes: ...
 
-    def get_many(self, *keys: Key) -> Dict[Key, Any]: ...
+    def get_many(self, keys: Iterable[str]) -> dict[str, Any]: ...
 
     def incr(self, key: str, value: int, noreply: Optional[bool] = False) -> int: ...
 
@@ -112,10 +110,10 @@ class MemcachedClientP(Protocol):
 
     def set_many(
         self,
-        values: dict[Key, Any],
+        values: dict[str, Serializable],
         expire: Optional[int],
         noreply: Optional[bool] = None,
-    ) -> list[Key]: ...
+    ) -> list[str]: ...
 
     def touch(
         self, key: str, expire: Optional[int] = 0, noreply: Optional[bool] = None

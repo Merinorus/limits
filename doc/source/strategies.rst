@@ -42,3 +42,38 @@ rate limit as the window for each limit is not fixed at the start and end of eac
 (i.e. N/second for a moving window means N in the last 1000 milliseconds). There is
 however a higher memory cost associated with this strategy as it requires ``N`` items to
 be maintained in memory per resource and rate limit.
+
+
+Sliding Window Counter
+======================
+
+.. warning:: The sliding window counter strategy is not implemented for the ``mongodb``
+    storage backend.
+
+This strategy is an approximation of the moving window strategy, with less memory use.
+It approximates the behavior of a moving window by maintaining counters for two adjacent
+fixed windows: the current window, and the previous window.
+
+At the first hit, the current window counter increases and the sampling period begins. Then,
+at the end of the sampling period, the window counter and expiration are moved to the previous window,
+and new requests will still increase the current window counter.
+
+To determine if a request should be allowed, we assume the requests in the previous window
+were distributed evenly over its duration (eg: if it received 5 requests in a period of 10 seconds, 
+we consider it has received one request every two seconds).
+
+Depending on how much time has elapsed since the current window was moved, a weight is applied:
+
+weighted_count =  previous_count * (expiration_period - time_elapsed_since_shift) / expiration_period + current_count
+
+For example, for a sampling period of 10 seconds and if the window has shifted 2 seconds ago,
+the :
+
+weighted_count = previous_count * (10 - 2) / 10 + current_count
+
+Contrary to the moving window strategy, at most two counters per rate limiter are needed,
+which dramatically reduce the memory usage.
+
+Limitation: with a very low sampling period and limit (e.g., '1 per 1 second'),
+the rate limiter may trigger prematurely because even slight fluctuations in request timing
+can disproportionately affect the weighted count.
