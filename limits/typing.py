@@ -71,6 +71,9 @@ class EmcacheClientP(Protocol):
     ) -> None: ...
 
 
+Key = Union[str, bytes]
+
+
 class MemcachedClientP(Protocol):
     def add(
         self,
@@ -83,16 +86,18 @@ class MemcachedClientP(Protocol):
 
     def get(self, key: str, default: Optional[str] = None) -> bytes: ...
 
+    def get_many(self, *keys: Key) -> Dict[Key, Any]: ...
+
     def incr(self, key: str, value: int, noreply: Optional[bool] = False) -> int: ...
 
     def decr(
         self,
         key: str,
-        offset: int,
-        initial_value: int = 0,
-        expiry: Optional[int] = 0,
-        noreply: Optional[bool] = None,
-    ) -> int: ...
+        value: int,
+        # initial_value: int = 0,
+        # expiry: Optional[int] = 0,
+        noreply: Optional[bool] = False,
+    ) -> Optional[int]: ...
 
     def delete(self, key: str, noreply: Optional[bool] = None) -> Optional[bool]: ...
 
@@ -104,6 +109,13 @@ class MemcachedClientP(Protocol):
         noreply: Optional[bool] = None,
         flags: Optional[int] = None,
     ) -> bool: ...
+
+    def set_many(
+        self,
+        values: dict[Key, Any],
+        expire: Optional[int],
+        noreply: Optional[bool] = None,
+    ) -> list[Key]: ...
 
     def touch(
         self, key: str, expire: Optional[int] = 0, noreply: Optional[bool] = None
