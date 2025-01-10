@@ -212,7 +212,7 @@ class SlidingWindowCounterSupport(ABC):
 
     @abstractmethod
     def get_sliding_window(
-        self, previous_key, current_key
+        self, previous_key: str, current_key: str
     ) -> tuple[int, float, int, float]:
         """
         Return the previous and current window information.

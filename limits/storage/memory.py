@@ -204,7 +204,7 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
         current_ttl = self.get_ttl(current_key)
         if current_ttl and current_ttl < expiry:
             self.clear(previous_key)
-            self.incr(previous_key, current_ttl, amount=self.storage.get(current_key))
+            self.incr(previous_key, current_ttl, amount=self.storage.get(current_key, 0))
             self.clear(current_key)
             # The current window has been reset, just set the right expiration time
             self.incr(current_key, expiry + current_ttl, amount=0)

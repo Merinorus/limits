@@ -5,7 +5,7 @@ import urllib.parse
 from contextlib import contextmanager
 from math import ceil
 from types import ModuleType
-from typing import Iterable, cast
+from typing import Any, Generator, Iterable, cast
 
 from limits.errors import ConfigurationError
 from limits.storage.base import SlidingWindowCounterSupport, Storage
@@ -84,7 +84,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         self.local_storage = threading.local()
         self.local_storage.storage = None
         super().__init__(uri, wrap_exceptions=wrap_exceptions)
-
+        
     @property
     def base_exceptions(
         self,
@@ -144,9 +144,9 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         """
         :param key: the key to get the counter value for
         """
-        return int(self.storage.get(key) or 0)
+        return int(self.storage.get(key, "0"))
 
-    def get_many(self, keys: Iterable[str]):
+    def get_many(self, keys: Iterable[str]) -> dict[str, Any]:
         """
         Return multiple counters at once
         :param key: the key to get the counter value for
@@ -202,7 +202,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         expiry: float,
         elastic_expiry: bool = False,
         amount: int = 1,
-    ) -> Optional[int]:
+    ) -> int:
         """
         increments the counter for a given rate limit key
 
@@ -211,7 +211,6 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         :param elastic_expiry: whether to keep extending the rate limit
          window every hit.
         :param amount: the number to increment by
-        :param noreply: if set to True, it will ignore the memcached return value and return None
         """
 
         if not self.call_memcached_func(
@@ -248,7 +247,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
 
         return float(self.storage.get(self._expiration_key(key)) or time.time())
 
-    def _ttl(self, expiry: Optional[Union[float, bytes]]):
+    def _ttl(self, expiry: Optional[Union[float, bytes]]) -> float:
         return max(0, float(expiry or 0) - time.time())
 
     def get_ttl(self, key: str) -> float:
@@ -256,9 +255,9 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         :param key: the key to get the TTL for
         """
         now = time.time()
-        return max(0, float(self.storage.get(self._expiration_key(key), now)) - now)
+        return max(0, float(self.storage.get(self._expiration_key(key)) or now) - now)
 
-    def _expiration_key(self, key):
+    def _expiration_key(self, key: str) -> str:
         """
         Return the expiration key for the given counter key.
 
@@ -282,23 +281,23 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
     def reset(self) -> Optional[int]:
         raise NotImplementedError
 
-    def _key_lock_name(self, key):
+    def _key_lock_name(self, key: str) -> str:
         return f"{key}/lock"
 
-    def __acquire_lock(self, key, limit_expiry) -> bool:
+    def __acquire_lock(self, key: str, limit_expiry: float) -> bool:
         """
         Lock acquisition on a specific memcached key. Non blocking (fail fast).
 
         Return True if the lock was acquired, false otherwise.
         """
-        return self.storage.add(self._key_lock_name(key), 1, expire=limit_expiry * 2)
+        return self.storage.add(self._key_lock_name(key), 1, expire=ceil(limit_expiry * 2))
 
-    def __release_lock(self, key):
+    def __release_lock(self, key: str) -> None:
         """Release the lock on a specific key. Ignore the result."""
         self.storage.delete(self._key_lock_name(key), noreply=False)
 
     @contextmanager
-    def _lock(self, key, limit_expiry):
+    def _lock(self, key: str, limit_expiry: float) -> Generator[None, None, None]:
         if not self.__acquire_lock(key, limit_expiry):
             return  # Fail silently and exit the context if lock acquisition fails
         try:
@@ -307,8 +306,8 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             self.__release_lock(key)
 
     def acquire_sliding_window_entry(
-        self, previous_key, current_key, limit, expiry, amount=1
-    ):
+        self, previous_key: str, current_key: str, limit: int, expiry: int, amount: int=1
+    ) -> bool:
         if amount > limit:
             return False
         previous_count, previous_ttl, current_count, current_ttl = (
@@ -339,7 +338,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             return True
 
     def get_sliding_window(
-        self, previous_key, current_key
+        self, previous_key: str, current_key: str
     ) -> tuple[int, float, int, float]:
         result = self.get_many(
             [

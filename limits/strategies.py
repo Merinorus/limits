@@ -178,9 +178,7 @@ class FixedWindowRateLimiter(RateLimiter):
 
 class SlidingWindowCounterRateLimiter(RateLimiter):
     """
-    TODO doc
-
-    Use two fixed windows: the current one and the previous one.
+    Reference: :ref:`strategies:sliding window counter`
     """
 
     def __init__(self, storage: StorageTypes):
@@ -199,13 +197,15 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         previous_count: int,
         previous_expires_in: float,
         current_count: int,
-    ):
-        """Return the approximated by weighting the previous window count and adding the current window count."""
+    ) -> int:
+        """
+        Return the approximated by weighting the previous window count and adding the current window count.
+        """
         return round(
             previous_count * previous_expires_in / item.get_expiry() + current_count
         )
 
-    def _current_key_for(self, item: RateLimitItem, *identifiers: str):
+    def _current_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
         """
         Return the current window's storage key.
 
@@ -218,7 +218,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         """
         return f"{{{item.key_for(*identifiers)}}}"
 
-    def _previous_key_for(self, item: RateLimitItem, *identifiers: str):
+    def _previous_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
         """
         Return the previous window's storage key.
 
@@ -281,7 +281,6 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :return: (reset time, remaining)
         """
-        # print("- GET WINDOW STATS")
 
         previous_count, previous_expires_in, current_count, current_expires_in = cast(
             SlidingWindowCounterSupport, self.storage
