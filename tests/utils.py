@@ -385,3 +385,65 @@ async_moving_window_storage = pytest.mark.parametrize(
         ),
     ],
 )
+
+async_sliding_window_counter_storage = pytest.mark.parametrize(
+    "uri, args, fixture",
+    [
+        pytest.param("async+memory://", {}, None, id="in-memory"),
+        pytest.param(
+            "async+redis://localhost:7379",
+            {},
+            lf("redis_basic"),
+            marks=pytest.mark.redis,
+            id="redis",
+        ),
+        pytest.param(
+            "async+memcached://localhost:22122",
+            {},
+            lf("memcached"),
+            marks=[pytest.mark.memcached, pytest.mark.flaky],
+            id="memcached",
+        ),
+        pytest.param(
+            "async+memcached://localhost:22122,localhost:22123",
+            {},
+            lf("memcached_cluster"),
+            marks=[pytest.mark.memcached, pytest.mark.flaky],
+            id="memcached-cluster",
+        ),
+        pytest.param(
+            "async+redis+cluster://localhost:7001/",
+            {},
+            lf("redis_cluster"),
+            marks=pytest.mark.redis_cluster,
+            id="redis-cluster",
+        ),
+        pytest.param(
+            "async+redis+cluster://:sekret@localhost:8400/",
+            {},
+            lf("redis_auth_cluster"),
+            marks=pytest.mark.redis_cluster,
+            id="redis-cluster-auth",
+        ),
+        pytest.param(
+            "async+redis+cluster://localhost:8301",
+            {
+                "ssl": True,
+                "ssl_cert_reqs": "required",
+                "ssl_keyfile": "./tests/tls/client.key",
+                "ssl_certfile": "./tests/tls/client.crt",
+                "ssl_ca_certs": "./tests/tls/ca.crt",
+            },
+            lf("redis_ssl_cluster"),
+            marks=pytest.mark.redis_cluster,
+            id="redis-ssl-cluster",
+        ),
+        pytest.param(
+            "async+redis+sentinel://localhost:26379/mymaster",
+            {"use_replicas": False},
+            lf("redis_sentinel"),
+            marks=pytest.mark.redis_sentinel,
+            id="redis-sentinel",
+        ),
+    ],
+)

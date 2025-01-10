@@ -172,25 +172,7 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
 
         return timestamp, acquired
 
-    # def sliding_window_shift(
-    #     self, previous_key: str, current_key: str, expiry: int
-    # ) -> tuple[int, float, int, float]:
-    #     current_ttl = self.get_ttl(current_key)
-    #     if current_ttl and current_ttl < expiry:
-    #         self.clear(previous_key)
-    #         self.incr(previous_key, current_ttl, amount=self.storage.get(current_key))
-    #         self.clear(current_key)
-    #         # The current window has been reset, just set the right expiration time
-    #         self.incr(current_key, expiry + current_ttl, amount=0)
-    #     return (
-    #         self.get(previous_key),
-    #         self.get_ttl(previous_key),
-    #         self.get(current_key),
-    #         self.get_ttl(current_key),
-    #     )
-
     def acquire_sliding_window_entry(
-        # self, previous_key: str, current_key: str, expiry: int
         self,
         previous_key: str,
         current_key: str,
@@ -204,7 +186,9 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
         current_ttl = self.get_ttl(current_key)
         if current_ttl and current_ttl < expiry:
             self.clear(previous_key)
-            self.incr(previous_key, current_ttl, amount=self.storage.get(current_key, 0))
+            self.incr(
+                previous_key, current_ttl, amount=self.storage.get(current_key, 0)
+            )
             self.clear(current_key)
             # The current window has been reset, just set the right expiration time
             self.incr(current_key, expiry + current_ttl, amount=0)
@@ -218,13 +202,6 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
 
         self.incr(current_key, expiry * 2, amount=amount)
         return True
-        # local weighted_count = previous_count * previous_ttl / expiry + current_count
-        # return (
-        #     self.get(previous_key),
-        #     self.get_ttl(previous_key),
-        #     self.get(current_key),
-        #     self.get_ttl(current_key),
-        # )
 
     def get_sliding_window(
         self, previous_key: str, current_key: str

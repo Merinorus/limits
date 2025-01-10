@@ -7,6 +7,7 @@ from limits.aio.strategies import (
     FixedWindowElasticExpiryRateLimiter,
     FixedWindowRateLimiter,
     MovingWindowRateLimiter,
+    SlidingWindowCounterRateLimiter,
 )
 from limits.limits import (
     RateLimitItemPerHour,
@@ -18,6 +19,7 @@ from tests.utils import (
     async_all_storage,
     async_fixed_start,
     async_moving_window_storage,
+    async_sliding_window_counter_storage,
     async_window,
 )
 
@@ -112,6 +114,58 @@ class TestAsyncWindow:
         assert (
             await limiter.get_window_stats(limit, "k2")
         ).reset_time == pytest.approx(end + 2, 1e-2)
+        assert not await limiter.hit(limit, "k2", cost=6)
+
+    @async_sliding_window_counter_storage
+    @async_fixed_start
+    async def test_sliding_window_counter(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerSecond(10, 2)
+        async with async_window(1) as (start, _):
+            assert all([await limiter.hit(limit) for _ in range(0, 10)])
+        assert not await limiter.hit(limit)
+        assert (await limiter.get_window_stats(limit)).remaining == 0
+        assert (await limiter.get_window_stats(limit)).reset_time == pytest.approx(
+            start + 2, 1e-2
+        )
+
+    @async_sliding_window_counter_storage
+    @async_fixed_start
+    async def test_sliding_window_counter_empty_stats(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerSecond(10, 2)
+        assert (await limiter.get_window_stats(limit)).remaining == 10
+        assert (await limiter.get_window_stats(limit)).reset_time == pytest.approx(
+            time.time(), 1e-2
+        )
+
+    @async_sliding_window_counter_storage
+    async def test_sliding_window_counter_stats(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerMinute(2)
+        assert await limiter.hit(limit, "key")
+        time.sleep(1)
+        assert await limiter.hit(limit, "key")
+        time.sleep(1)
+        assert not await limiter.hit(limit, "key")
+        assert (await limiter.get_window_stats(limit, "key")).remaining == 0
+        assert (
+            await limiter.get_window_stats(limit, "key")
+        ).reset_time - time.time() == pytest.approx(58, 1e-2)
+
+    @async_sliding_window_counter_storage
+    @async_fixed_start
+    async def test_sliding_window_counter_multiple_cost(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerMinute(10, 2)
+        assert not await limiter.hit(limit, "k1", cost=11)
+        assert await limiter.hit(limit, "k2", cost=5)
+        assert (await limiter.get_window_stats(limit, "k2")).remaining == 5
+        assert not await limiter.test(limit, "k2", cost=6)
         assert not await limiter.hit(limit, "k2", cost=6)
 
     @async_moving_window_storage

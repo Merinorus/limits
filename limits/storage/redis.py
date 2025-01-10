@@ -82,30 +82,6 @@ class RedisInteractor:
             current_expires_in,
         )
 
-    # def sliding_window_shift(
-    #     self, previous_key: str, current_key: str, expiry: int
-    # ) -> tuple[int, float, int, float]:
-    #     previous_key = self.prefixed_key(previous_key)
-    #     current_key = self.prefixed_key(current_key)
-    #     if window := self.lua_sliding_window_shift(
-    #         [previous_key, current_key], [expiry]
-    #     ):
-    #         previous_count, previous_expires_in, current_count, current_expires_in = (
-    #             int(window[0] or 0),
-    #             max(0, float(window[1] or 0)) / 1000,
-    #             int(window[2] or 0),
-    #             max(0, float(window[3] or 0)) / 1000,
-    #         )
-    #         # print(
-    #         #     f"{previous_count}, {previous_expires_in}, {current_count}, {current_expires_in}"
-    #         # )
-    #         return (
-    #             previous_count,
-    #             previous_expires_in,
-    #             current_count,
-    #             current_expires_in,
-    #         )
-
     def _incr(
         self,
         key: str,
@@ -273,14 +249,12 @@ class RedisStorage(
             self.SCRIPT_ACQUIRE_MOVING_WINDOW
         )
         self.lua_clear_keys = self.storage.register_script(self.SCRIPT_CLEAR_KEYS)
-        self.lua_incr_expire = self.storage.register_script(
-            RedisStorage.SCRIPT_INCR_EXPIRE
-        )
+        self.lua_incr_expire = self.storage.register_script(self.SCRIPT_INCR_EXPIRE)
         self.lua_sliding_window = self.storage.register_script(
-            RedisStorage.SCRIPT_SLIDING_WINDOW
+            self.SCRIPT_SLIDING_WINDOW
         )
         self.lua_acquire_sliding_window = self.storage.register_script(
-            RedisStorage.SCRIPT_ACQUIRE_SLIDING_WINDOW
+            self.SCRIPT_ACQUIRE_SLIDING_WINDOW
         )
 
     def incr(
@@ -340,7 +314,7 @@ class RedisStorage(
         :param expiry: expiry of the entry
         :param amount: the number of entries to acquire
         """
-        return self._acquire_sliding_window_entry(
+        return super()._acquire_sliding_window_entry(
             previous_key, current_key, limit, expiry, amount
         )
 
