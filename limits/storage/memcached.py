@@ -84,7 +84,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         self.local_storage = threading.local()
         self.local_storage.storage = None
         super().__init__(uri, wrap_exceptions=wrap_exceptions)
-        
+
     @property
     def base_exceptions(
         self,
@@ -146,7 +146,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         """
         return int(self.storage.get(key, "0"))
 
-    def get_many(self, keys: Iterable[str]) -> dict[str, Any]:
+    def get_many(self, keys: Iterable[str]) -> dict[str, Any]:  # type:ignore[misc]
         """
         Return multiple counters at once
         :param key: the key to get the counter value for
@@ -170,10 +170,12 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         """
         # TODO: why setting noreply=False increase IOPS?
 
-        self.call_memcached_func(self.storage.set, key, value, ceil(expiry), noreply=False)
+        self.call_memcached_func(
+            self.storage.set, key, value, ceil(expiry), noreply=False
+        )
         self.call_memcached_func(
             self.storage.set,
-            key + "/expires",
+            self._expiration_key(key),
             expiry + time.time(),
             expire=ceil(expiry),
             noreply=False,
@@ -186,10 +188,12 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         :param key: the key to set
         :param expiry: the new amount in seconds for the key to expire
         """
-        if self.call_memcached_func(self.storage.touch, key, ceil(expiry), noreply=False):
+        if self.call_memcached_func(
+            self.storage.touch, key, ceil(expiry), noreply=False
+        ):
             return self.call_memcached_func(
                 self.storage.set,
-                key + "/expires",
+                self._expiration_key(key),
                 expiry + time.time(),
                 expire=ceil(expiry),
                 noreply=False,
@@ -222,7 +226,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
                 self.call_memcached_func(self.storage.touch, key, ceil(expiry))
                 self.call_memcached_func(
                     self.storage.set,
-                    key + "/expires",
+                    self._expiration_key(key),
                     expiry + time.time(),
                     expire=ceil(expiry),
                     noreply=False,
@@ -232,7 +236,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         else:
             self.call_memcached_func(
                 self.storage.set,
-                key + "/expires",
+                self._expiration_key(key),
                 expiry + time.time(),
                 expire=ceil(expiry),
                 noreply=False,
@@ -290,7 +294,9 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
 
         Return True if the lock was acquired, false otherwise.
         """
-        return self.storage.add(self._key_lock_name(key), 1, expire=ceil(limit_expiry * 2))
+        return self.storage.add(
+            self._key_lock_name(key), 1, expire=ceil(limit_expiry * 2)
+        )
 
     def __release_lock(self, key: str) -> None:
         """Release the lock on a specific key. Ignore the result."""
@@ -306,7 +312,12 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             self.__release_lock(key)
 
     def acquire_sliding_window_entry(
-        self, previous_key: str, current_key: str, limit: int, expiry: int, amount: int=1
+        self,
+        previous_key: str,
+        current_key: str,
+        limit: int,
+        expiry: int,
+        amount: int = 1,
     ) -> bool:
         if amount > limit:
             return False
@@ -317,16 +328,18 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         if current_ttl > 0 and current_ttl < expiry:
             # Current window expired, acquire lock and shift it to the previous window
             with self._lock(current_key, expiry):
-
                 # Extend the current counter expiry. Recreate it if it has just expired.
                 if not self.touch(current_key, current_ttl + expiry):
                     self.incr(current_key, current_ttl + expiry, amount=0)
 
                 # Move the current window counter and expiry to the previous one
                 self.set(previous_key, current_count, current_ttl)
-                current_count = self.call_memcached_func(
-                    self.storage.decr, current_key, current_count
-                ) or 0
+                current_count = (
+                    self.call_memcached_func(
+                        self.storage.decr, current_key, current_count
+                    )
+                    or 0
+                )
 
         weighted_count = previous_count * previous_ttl / expiry + current_count
         if weighted_count + amount > limit:

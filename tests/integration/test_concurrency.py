@@ -14,6 +14,7 @@ from tests.utils import (
     all_storage,
     async_all_storage,
     async_moving_window_storage,
+    async_sliding_window_counter_storage,
     moving_window_storage,
     sliding_window_counter_storage,
 )
@@ -95,6 +96,26 @@ class TestAsyncConcurrency:
     async def test_fixed_window(self, uri, args, fixture):
         storage = storage_from_string(uri, **args)
         limiter = limits.aio.strategies.FixedWindowRateLimiter(storage)
+        limit = RateLimitItemPerMinute(5)
+
+        [await limiter.hit(limit, uuid4().hex) for _ in range(50)]
+
+        key = uuid4().hex
+        hits = []
+
+        async def hit():
+            await asyncio.sleep(random.random())
+            if await limiter.hit(limit, key):
+                hits.append(None)
+
+        await asyncio.gather(*[hit() for _ in range(50)])
+
+        assert len(hits) == 5
+
+    @async_sliding_window_counter_storage
+    async def test_sliding_window_counter(self, uri, args, fixture):
+        storage = storage_from_string(uri, **args)
+        limiter = limits.aio.strategies.SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerMinute(5)
 
         [await limiter.hit(limit, uuid4().hex) for _ in range(50)]

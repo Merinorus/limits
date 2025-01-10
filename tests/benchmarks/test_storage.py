@@ -15,6 +15,7 @@ from tests.utils import (
     all_storage,
     async_all_storage,
     async_moving_window_storage,
+    async_sliding_window_counter_storage,
     moving_window_storage,
     sliding_window_counter_storage,
 )
@@ -85,6 +86,19 @@ def test_moving_window_async(event_loop, benchmark, uri, args, fixture):
             hit_window_async,
             event_loop,
             limits.aio.strategies.MovingWindowRateLimiter,
+            storage_from_string(uri, **args),
+        )
+    )
+
+
+@async_sliding_window_counter_storage
+@pytest.mark.benchmark(group="async-sliding-window-counter")
+def test_sliding_window_counter_async(event_loop, benchmark, uri, args, fixture):
+    benchmark(
+        functools.partial(
+            hit_window_async,
+            event_loop,
+            limits.aio.strategies.SlidingWindowCounterRateLimiter,
             storage_from_string(uri, **args),
         )
     )

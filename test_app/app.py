@@ -7,6 +7,7 @@ from slowapi.util import get_remote_address
 # redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
 
 # limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="redis://localhost:7379/0")
+# limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="memcached://localhost:22122")
 limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="memcached://localhost:22122")
 
 # limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter")

@@ -216,9 +216,7 @@ class SlidingWindowCounterSupport(ABC):
     ) -> tuple[int, float, int, float]:
         """
         Return the previous and current window information.
-
         This method should be implemented by the inherited classes if a more performant solution is available.
-
         Return a tuple[int, float, int_ float] with the following information:
         - previous window counter (int)
         - previous window TTL (float)
