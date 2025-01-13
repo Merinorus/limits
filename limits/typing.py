@@ -92,7 +92,9 @@ class MemcachedClientP(Protocol):
 
     def get_many(self, keys: Iterable[str]) -> dict[str, Any]: ...  # type:ignore[misc]
 
-    def incr(self, key: str, value: int, noreply: Optional[bool] = False) -> int: ...
+    def incr(
+        self, key: str, value: int, noreply: Optional[bool] = False
+    ) -> Optional[int]: ...
 
     def decr(
         self,
