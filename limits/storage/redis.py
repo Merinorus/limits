@@ -56,7 +56,7 @@ class RedisInteractor:
         return timestamp, 0
 
     def get_sliding_window(
-        self, previous_key: str, current_key: str
+        self, key: str, expiry: Optional[int] = None
     ) -> Tuple[int, float, int, float]:
         """
         returns the starting point and the number of entries in the moving
@@ -66,8 +66,8 @@ class RedisInteractor:
         :param expiry: expiry of entry
         :return: (start of window, number of acquired entries)
         """
-        previous_key = self.prefixed_key(previous_key)
-        current_key = self.prefixed_key(current_key)
+        previous_key = self.prefixed_key(self._previous_window_key(key))
+        current_key = self.prefixed_key(self._current_window_key(key))
         if window := self.lua_sliding_window([previous_key, current_key], []):
             previous_count, previous_expires_in, current_count, current_expires_in = (
                 int(window[0] or 0),
@@ -148,8 +148,7 @@ class RedisInteractor:
 
     def _acquire_sliding_window_entry(
         self,
-        previous_key: str,
-        current_key: str,
+        key: str,
         limit: int,
         expiry: int,
         amount: int = 1,
@@ -162,8 +161,8 @@ class RedisInteractor:
         :param expiry: expiry of the entry
         :param amount: the number of entries to acquire
         """
-        previous_key = self.prefixed_key(previous_key)
-        current_key = self.prefixed_key(current_key)
+        previous_key = self.prefixed_key(self._previous_window_key(key))
+        current_key = self.prefixed_key(self._current_window_key(key))
         acquired = self.lua_acquire_sliding_window(
             [previous_key, current_key], [limit, expiry, amount]
         )
@@ -187,6 +186,30 @@ class RedisInteractor:
             return connection.ping()
         except:  # noqa
             return False
+
+    def _current_window_key(self, key: str) -> str:
+        """
+        Return the current window's storage key (Sliding window strategy)
+
+        Contrary to other strategies that have one key per rate limit item,
+        this strategy has two keys per rate limit item than must be on the same machine.
+        To keep the current key and the previous key on the same Redis cluster node,
+        curvy braces are added.
+
+        Eg: "{constructed_key}"
+        """
+        return f"{{{key}}}"
+
+    def _previous_window_key(self, key: str) -> str:
+        """
+        Return the previous window's storage key (Sliding window strategy).
+
+        Curvy braces are added on the common pattern with the current window's key,
+        so the current and the previous key are stored on the same Redis cluster node.
+
+        Eg: "{constructed_key}/-1"
+        """
+        return f"{self._current_window_key(key)}/-1"
 
 
 class RedisStorage(
@@ -300,23 +323,20 @@ class RedisStorage(
 
     def acquire_sliding_window_entry(
         self,
-        previous_key: str,
-        current_key: str,
+        key: str,
         limit: int,
         expiry: int,
         amount: int = 1,
     ) -> bool:
         """
         Acquire an entry. Shift the current window to the previous window if it expired.
-        :param current_window_key: current window key
+        :param key: rate limit key to acquire an entry in
         :param previous_window_key: previous window key
         :param limit: amount of entries allowed
         :param expiry: expiry of the entry
         :param amount: the number of entries to acquire
         """
-        return super()._acquire_sliding_window_entry(
-            previous_key, current_key, limit, expiry, amount
-        )
+        return super()._acquire_sliding_window_entry(key, limit, expiry, amount)
 
     def get_expiry(self, key: str) -> float:
         """

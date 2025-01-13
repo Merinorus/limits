@@ -2,10 +2,9 @@ import inspect
 import threading
 import time
 import urllib.parse
-from contextlib import contextmanager
 from math import ceil
 from types import ModuleType
-from typing import Any, Generator, Iterable, cast
+from typing import Any, Iterable, cast
 
 from limits.errors import ConfigurationError
 from limits.storage.base import SlidingWindowCounterSupport, Storage
@@ -285,61 +284,95 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
     def reset(self) -> Optional[int]:
         raise NotImplementedError
 
-    def _key_lock_name(self, key: str) -> str:
-        return f"{key}/lock"
-
-    def __acquire_lock(self, key: str, limit_expiry: float) -> bool:
+    def _current_window_key(
+        self, key: str, expiry: int, now: Optional[float] = None
+    ) -> str:
         """
-        Lock acquisition on a specific memcached key. Non blocking (fail fast).
+        Return the current window's storage key (Sliding window strategy)
 
-        Return True if the lock was acquired, false otherwise.
+        Contrary to other strategies that have one key per rate limit item,
+        this strategy has two keys per rate limit item than must be on the same machine.
+        To keep the current key and the previous key on the same Redis cluster node,
+        curvy braces are added.
+
+        Eg: "{constructed_key}"
         """
-        return self.storage.add(
-            self._key_lock_name(key), 1, expire=ceil(limit_expiry * 2)
-        )
+        if now is None:
+            now = time.time()
+        return f"{key}/{int(now / expiry)}"
 
-    def __release_lock(self, key: str) -> None:
-        """Release the lock on a specific key. Ignore the result."""
-        self.storage.delete(self._key_lock_name(key), noreply=False)
+    def _previous_window_key(
+        self, key: str, expiry: int, now: Optional[float] = None
+    ) -> str:
+        """
+        Return the previous window's storage key (Sliding window strategy).
 
-    @contextmanager
-    def _lock(self, key: str, limit_expiry: float) -> Generator[None, None, None]:
-        if not self.__acquire_lock(key, limit_expiry):
-            return  # Fail silently and exit the context if lock acquisition fails
-        try:
-            yield
-        finally:
-            self.__release_lock(key)
+        Curvy braces are added on the common pattern with the current window's key,
+        so the current and the previous key are stored on the same Redis cluster node.
+
+        Eg: "{constructed_key}/-1"
+        """
+        if now is None:
+            now = time.time()
+        return f"{key}/{int((now - expiry) / expiry)}"
+
+    # def _key_lock_name(self, key: str) -> str:
+    #     return f"{key}/lock"
+
+    # def __acquire_lock(self, key: str, limit_expiry: float) -> bool:
+    #     """
+    #     Lock acquisition on a specific memcached key. Non blocking (fail fast).
+
+    #     Return True if the lock was acquired, false otherwise.
+    #     """
+    #     return self.storage.add(
+    #         self._key_lock_name(key), 1, expire=ceil(limit_expiry * 2)
+    #     )
+
+    # def __release_lock(self, key: str) -> None:
+    #     """Release the lock on a specific key. Ignore the result."""
+    #     self.storage.delete(self._key_lock_name(key), noreply=False)
+
+    # @contextmanager
+    # def _lock(self, key: str, limit_expiry: float) -> Generator[None, None, None]:
+    #     if not self.__acquire_lock(key, limit_expiry):
+    #         return  # Fail silently and exit the context if lock acquisition fails
+    #     try:
+    #         yield
+    #     finally:
+    #         self.__release_lock(key)
 
     def acquire_sliding_window_entry(
         self,
-        previous_key: str,
-        current_key: str,
+        key: str,
         limit: int,
         expiry: int,
         amount: int = 1,
     ) -> bool:
         if amount > limit:
             return False
-        previous_count, previous_ttl, current_count, current_ttl = (
-            self.get_sliding_window(previous_key, current_key)
+        now = time.time()
+        current_key = self._current_window_key(key, expiry, now)
+        # previous_key = self._previous_window_key(key, expiry, now)
+        previous_count, previous_ttl, current_count, _ = self._get_sliding_window_info(
+            key, expiry, get_current_ttl=False
         )
 
-        if current_ttl > 0 and current_ttl < expiry:
-            # Current window expired, acquire lock and shift it to the previous window
-            with self._lock(current_key, expiry):
-                # Extend the current counter expiry. Recreate it if it has just expired.
-                if not self.touch(current_key, current_ttl + expiry):
-                    self.incr(current_key, current_ttl + expiry, amount=0)
+        # if current_ttl > 0 and current_ttl < expiry:
+        #     # Current window expired, acquire lock and shift it to the previous window
+        #     with self._lock(current_key, expiry):
+        #         # Extend the current counter expiry. Recreate it if it has just expired.
+        #         if not self.touch(current_key, current_ttl + expiry):
+        #             self.incr(current_key, current_ttl + expiry, amount=0)
 
-                # Move the current window counter and expiry to the previous one
-                self.set(previous_key, current_count, current_ttl)
-                current_count = (
-                    self.call_memcached_func(
-                        self.storage.decr, current_key, current_count
-                    )
-                    or 0
-                )
+        #         # Move the current window counter and expiry to the previous one
+        #         self.set(previous_key, current_count, current_ttl)
+        #         current_count = (
+        #             self.call_memcached_func(
+        #                 self.storage.decr, current_key, current_count
+        #             )
+        #             or 0
+        #         )
 
         weighted_count = previous_count * previous_ttl / expiry + current_count
         if weighted_count + amount > limit:
@@ -351,16 +384,36 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             return True
 
     def get_sliding_window(
-        self, previous_key: str, current_key: str
+        self, key: str, expiry: Optional[int] = None
     ) -> tuple[int, float, int, float]:
-        result = self.get_many(
-            [
-                previous_key,
-                self._expiration_key(previous_key),
-                current_key,
-                self._expiration_key(current_key),
-            ]
-        )
+        return self._get_sliding_window_info(key, expiry)
+
+    def _get_sliding_window_info(
+        self, key: str, expiry: Optional[int] = None, get_current_ttl: bool = True
+    ) -> tuple[int, float, int, float]:
+        if expiry is None:
+            raise ValueError("the expiry value is needed for this storage.")
+
+        now = time.time()
+        current_key = self._current_window_key(key, expiry, now)
+        previous_key = self._previous_window_key(key, expiry, now)
+        if get_current_ttl:
+            result = self.get_many(
+                [
+                    previous_key,
+                    self._expiration_key(previous_key),
+                    current_key,
+                    self._expiration_key(current_key),
+                ]
+            )
+        else:
+            result = self.get_many(
+                [
+                    previous_key,
+                    self._expiration_key(previous_key),
+                    current_key,
+                ]
+            )
         previous_count, previous_ttl, current_count, current_ttl = (
             int(result.get(previous_key, 0)),
             self._ttl(result.get(self._expiration_key(previous_key))),

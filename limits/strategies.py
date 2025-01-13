@@ -205,29 +205,29 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
             previous_count * previous_expires_in / item.get_expiry() + current_count
         )
 
-    def _current_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
-        """
-        Return the current window's storage key.
+    # def _current_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
+    #     """
+    #     Return the current window's storage key.
 
-        Contrary to other strategies that have one key per rate limit item,
-        this strategy has two keys per rate limit item than must be on the same machine.
-        To keep the current key and the previous key on the same Redis cluster node,
-        curvy braces are added.
+    #     Contrary to other strategies that have one key per rate limit item,
+    #     this strategy has two keys per rate limit item than must be on the same machine.
+    #     To keep the current key and the previous key on the same Redis cluster node,
+    #     curvy braces are added.
 
-        Eg: "{constructed_key}"
-        """
-        return f"{{{item.key_for(*identifiers)}}}"
+    #     Eg: "{constructed_key}"
+    #     """
+    #     return f"{{{item.key_for(*identifiers)}}}"
 
-    def _previous_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
-        """
-        Return the previous window's storage key.
+    # def _previous_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
+    #     """
+    #     Return the previous window's storage key.
 
-        Curvy braces are added on the common pattern with the current window's key,
-        so the current and the previous key are stored on the same Redis cluster node.
+    #     Curvy braces are added on the common pattern with the current window's key,
+    #     so the current and the previous key are stored on the same Redis cluster node.
 
-        Eg: "{constructed_key}/-1"
-        """
-        return f"{self._current_key_for(item, *identifiers)}/-1"
+    #     Eg: "{constructed_key}/-1"
+    #     """
+    #     return f"{self._current_key_for(item, *identifiers)}/-1"
 
     def hit(self, item: RateLimitItem, *identifiers: str, cost: int = 1) -> bool:
         """
@@ -241,8 +241,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         return cast(
             SlidingWindowCounterSupport, self.storage
         ).acquire_sliding_window_entry(
-            self._previous_key_for(item, *identifiers),
-            self._current_key_for(item, *identifiers),
+            item.key_for(*identifiers),
             item.amount,
             item.get_expiry(),
             cost,
@@ -260,10 +259,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
 
         previous_count, previous_expires_in, current_count, _ = cast(
             SlidingWindowCounterSupport, self.storage
-        ).get_sliding_window(
-            self._previous_key_for(item, *identifiers),
-            self._current_key_for(item, *identifiers),
-        )
+        ).get_sliding_window(item.key_for(*identifiers), item.get_expiry())
 
         return (
             self._weighted_count(
@@ -284,10 +280,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
 
         previous_count, previous_expires_in, current_count, current_expires_in = cast(
             SlidingWindowCounterSupport, self.storage
-        ).get_sliding_window(
-            self._previous_key_for(item, *identifiers),
-            self._current_key_for(item, *identifiers),
-        )
+        ).get_sliding_window(item.key_for(*identifiers), item.get_expiry())
         remaining = max(
             0,
             item.amount
