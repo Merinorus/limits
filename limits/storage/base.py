@@ -193,12 +193,7 @@ class SlidingWindowCounterSupport(ABC):
 
     @abstractmethod
     def acquire_sliding_window_entry(
-        self,
-        previous_key: str,
-        current_key: str,
-        limit: int,
-        expiry: int,
-        amount: int = 1,
+        self, key: str, limit: int, expiry: int, amount: int = 1
     ) -> bool:
         """
         Acquire an entry. Shift the current window to the previous window if it expired.
@@ -212,7 +207,7 @@ class SlidingWindowCounterSupport(ABC):
 
     @abstractmethod
     def get_sliding_window(
-        self, previous_key: str, current_key: str
+        self, key: str, expiry: Optional[int] = None
     ) -> tuple[int, float, int, float]:
         """
         Return the previous and current window information.

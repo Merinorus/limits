@@ -18,6 +18,13 @@ class LockableEntry(threading._RLock):  # type: ignore
         super().__init__()
 
 
+def _previous_window_key(key: str) -> str:
+    """
+    Return the previous window's storage key for the sliding window strategy.
+    """
+    return f"{key}/-1"
+
+
 class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
     """
     rate limit storage using :class:`collections.Counter`
@@ -174,15 +181,15 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
 
     def acquire_sliding_window_entry(
         self,
-        previous_key: str,
-        current_key: str,
+        key: str,
         limit: int,
         expiry: int,
         amount: int = 1,
     ) -> bool:
         if amount > limit:
             return False
-
+        current_key = key
+        previous_key = _previous_window_key(key)
         current_ttl = self.get_ttl(current_key)
         if current_ttl and current_ttl < expiry:
             self.clear(previous_key)
@@ -204,7 +211,7 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
         return True
 
     def get_sliding_window(
-        self, previous_key: str, current_key: str
+        self, key: str, expiry: Optional[int] = None
     ) -> Tuple[int, float, int, float]:
         """
         returns the starting point and the number of entries in the moving
@@ -214,11 +221,12 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
         :param expiry: expiry of entry
         :return: (start of window, number of acquired entries)
         """
+        _previous_window_key
         return (
-            self.get(previous_key),
-            self.get_ttl(previous_key),
-            self.get(current_key),
-            self.get_ttl(current_key),
+            self.get(_previous_window_key(key)),
+            self.get_ttl(_previous_window_key(key)),
+            self.get(key),
+            self.get_ttl(key),
         )
 
     def check(self) -> bool:
