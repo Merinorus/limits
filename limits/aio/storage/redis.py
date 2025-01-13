@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, cast
 from deprecated.sphinx import versionadded
 from packaging.version import Version
 
-from limits.aio.storage.base import MovingWindowSupport, Storage
+from limits.aio.storage.base import (
+    MovingWindowSupport,
+    SlidingWindowCounterSupport,
+    Storage,
+)
 from limits.errors import ConfigurationError
 from limits.typing import AsyncRedisClient, Dict, Optional, Tuple, Type, Union
 from limits.util import get_package_data
@@ -24,9 +28,15 @@ class RedisInteractor:
     )
     SCRIPT_CLEAR_KEYS = get_package_data(f"{RES_DIR}/clear_keys.lua")
     SCRIPT_INCR_EXPIRE = get_package_data(f"{RES_DIR}/incr_expire.lua")
+    SCRIPT_SLIDING_WINDOW = get_package_data(f"{RES_DIR}/sliding_window.lua")
+    SCRIPT_ACQUIRE_SLIDING_WINDOW = get_package_data(
+        f"{RES_DIR}/acquire_sliding_window.lua"
+    )
 
     lua_moving_window: "coredis.commands.Script[bytes]"
-    lua_acquire_window: "coredis.commands.Script[bytes]"
+    lua_acquire_moving_window: "coredis.commands.Script[bytes]"
+    lua_sliding_window: "coredis.commands.Script[bytes]"
+    lua_acquire_sliding_window: "coredis.commands.Script[bytes]"
     lua_clear_keys: "coredis.commands.Script[bytes]"
     lua_incr_expire: "coredis.commands.Script[bytes]"
 
@@ -96,6 +106,34 @@ class RedisInteractor:
             return float(window[0]), window[1]  # type: ignore
         return timestamp, 0
 
+    async def get_sliding_window(
+        self, previous_key: str, current_key: str
+    ) -> Tuple[int, float, int, float]:
+        """
+        returns the starting point and the number of entries in the moving
+        window
+        :param key: rate limit key
+        :param expiry: expiry of entry
+        :return: (start of window, number of acquired entries)
+        """
+        previous_key = self.prefixed_key(previous_key)
+        current_key = self.prefixed_key(current_key)
+
+        window = await self.lua_sliding_window.execute([previous_key, current_key], [])
+        if window:
+            previous_count, previous_expires_in, current_count, current_expires_in = (
+                int(window[0] or 0),  # type: ignore
+                max(0, float(window[1] or 0)) / 1000,  # type: ignore
+                int(window[2] or 0),  # type: ignore
+                max(0, float(window[3] or 0)) / 1000,  # type: ignore
+            )
+        return (
+            previous_count,
+            previous_expires_in,
+            current_count,
+            current_expires_in,
+        )
+
     async def _acquire_entry(
         self,
         key: str,
@@ -112,10 +150,33 @@ class RedisInteractor:
         """
         key = self.prefixed_key(key)
         timestamp = time.time()
-        acquired = await self.lua_acquire_window.execute(
+        acquired = await self.lua_acquire_moving_window.execute(
             [key], [timestamp, limit, expiry, amount]
         )
 
+        return bool(acquired)
+
+    async def _acquire_sliding_window_entry(
+        self,
+        previous_key: str,
+        current_key: str,
+        limit: int,
+        expiry: int,
+        amount: int = 1,
+    ) -> bool:
+        """
+        Acquire an entry. Shift the current window to the previous window if it expired.
+        :param current_window_key: current window key
+        :param previous_window_key: previous window key
+        :param limit: amount of entries allowed
+        :param expiry: expiry of the entry
+        :param amount: the number of entries to acquire
+        """
+        previous_key = self.prefixed_key(previous_key)
+        current_key = self.prefixed_key(current_key)
+        acquired = await self.lua_acquire_sliding_window.execute(
+            [previous_key, current_key], [limit, expiry, amount]
+        )
         return bool(acquired)
 
     async def _get_expiry(self, key: str, connection: AsyncRedisClient) -> float:
@@ -142,7 +203,9 @@ class RedisInteractor:
 
 
 @versionadded(version="2.1")
-class RedisStorage(RedisInteractor, Storage, MovingWindowSupport):
+class RedisStorage(
+    RedisInteractor, Storage, MovingWindowSupport, SlidingWindowCounterSupport
+):
     """
     Rate limit storage with redis as backend.
 
@@ -206,12 +269,16 @@ class RedisStorage(RedisInteractor, Storage, MovingWindowSupport):
     def initialize_storage(self, _uri: str) -> None:
         # all these methods are coroutines, so must be called with await
         self.lua_moving_window = self.storage.register_script(self.SCRIPT_MOVING_WINDOW)
-        self.lua_acquire_window = self.storage.register_script(
+        self.lua_acquire_moving_window = self.storage.register_script(
             self.SCRIPT_ACQUIRE_MOVING_WINDOW
         )
         self.lua_clear_keys = self.storage.register_script(self.SCRIPT_CLEAR_KEYS)
-        self.lua_incr_expire = self.storage.register_script(
-            RedisStorage.SCRIPT_INCR_EXPIRE
+        self.lua_incr_expire = self.storage.register_script(self.SCRIPT_INCR_EXPIRE)
+        self.lua_sliding_window = self.storage.register_script(
+            self.SCRIPT_SLIDING_WINDOW
+        )
+        self.lua_acquire_sliding_window = self.storage.register_script(
+            self.SCRIPT_ACQUIRE_SLIDING_WINDOW
         )
 
     async def incr(
@@ -260,6 +327,26 @@ class RedisStorage(RedisInteractor, Storage, MovingWindowSupport):
         """
 
         return await super()._acquire_entry(key, limit, expiry, self.storage, amount)
+
+    async def acquire_sliding_window_entry(
+        self,
+        previous_key: str,
+        current_key: str,
+        limit: int,
+        expiry: int,
+        amount: int = 1,
+    ) -> bool:
+        """
+        Acquire an entry. Shift the current window to the previous window if it expired.
+        :param current_window_key: current window key
+        :param previous_window_key: previous window key
+        :param limit: amount of entries allowed
+        :param expiry: expiry of the entry
+        :param amount: the number of entries to acquire
+        """
+        return await super()._acquire_sliding_window_entry(
+            previous_key, current_key, limit, expiry, amount
+        )
 
     async def get_expiry(self, key: str) -> float:
         """

@@ -2,8 +2,11 @@
 Rate limiting strategies
 """
 
+import time
 from abc import ABCMeta, abstractmethod
 from typing import Dict, Type, Union, cast
+
+from limits.storage.base import SlidingWindowCounterSupport
 
 from .limits import RateLimitItem
 from .storage import MovingWindowSupport, Storage, StorageTypes
@@ -173,6 +176,121 @@ class FixedWindowRateLimiter(RateLimiter):
         return WindowStats(reset, remaining)
 
 
+class SlidingWindowCounterRateLimiter(RateLimiter):
+    """
+    Reference: :ref:`strategies:sliding window counter`
+    """
+
+    def __init__(self, storage: StorageTypes):
+        if not hasattr(storage, "get_sliding_window") or not hasattr(
+            storage, "acquire_sliding_window_entry"
+        ):
+            raise NotImplementedError(
+                "SlidingWindowCounterRateLimiting is not implemented for storage "
+                "of type %s" % storage.__class__
+            )
+        super().__init__(storage)
+
+    def _weighted_count(
+        self,
+        item: RateLimitItem,
+        previous_count: int,
+        previous_expires_in: float,
+        current_count: int,
+    ) -> int:
+        """
+        Return the approximated by weighting the previous window count and adding the current window count.
+        """
+        return round(
+            previous_count * previous_expires_in / item.get_expiry() + current_count
+        )
+
+    # def _current_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
+    #     """
+    #     Return the current window's storage key.
+
+    #     Contrary to other strategies that have one key per rate limit item,
+    #     this strategy has two keys per rate limit item than must be on the same machine.
+    #     To keep the current key and the previous key on the same Redis cluster node,
+    #     curvy braces are added.
+
+    #     Eg: "{constructed_key}"
+    #     """
+    #     return f"{{{item.key_for(*identifiers)}}}"
+
+    # def _previous_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
+    #     """
+    #     Return the previous window's storage key.
+
+    #     Curvy braces are added on the common pattern with the current window's key,
+    #     so the current and the previous key are stored on the same Redis cluster node.
+
+    #     Eg: "{constructed_key}/-1"
+    #     """
+    #     return f"{self._current_key_for(item, *identifiers)}/-1"
+
+    def hit(self, item: RateLimitItem, *identifiers: str, cost: int = 1) -> bool:
+        """
+        Consume the rate limit
+
+        :param item: The rate limit item
+        :param identifiers: variable list of strings to uniquely identify this
+         instance of the limit
+        :param cost: The cost of this hit, default 1
+        """
+        return cast(
+            SlidingWindowCounterSupport, self.storage
+        ).acquire_sliding_window_entry(
+            item.key_for(*identifiers),
+            item.amount,
+            item.get_expiry(),
+            cost,
+        )
+
+    def test(self, item: RateLimitItem, *identifiers: str, cost: int = 1) -> bool:
+        """
+        Check if the rate limit can be consumed
+
+        :param item: The rate limit item
+        :param identifiers: variable list of strings to uniquely identify this
+         instance of the limit
+        :param cost: The expected cost to be consumed, default 1
+        """
+
+        previous_count, previous_expires_in, current_count, _ = cast(
+            SlidingWindowCounterSupport, self.storage
+        ).get_sliding_window(item.key_for(*identifiers), item.get_expiry())
+
+        return (
+            self._weighted_count(
+                item, previous_count, previous_expires_in, current_count
+            )
+            < item.amount - cost + 1
+        )
+
+    def get_window_stats(self, item: RateLimitItem, *identifiers: str) -> WindowStats:
+        """
+        Query the reset time and remaining amount for the limit.
+
+        :param item: The rate limit item
+        :param identifiers: variable list of strings to uniquely identify this
+         instance of the limit
+        :return: (reset time, remaining)
+        """
+
+        previous_count, previous_expires_in, current_count, current_expires_in = cast(
+            SlidingWindowCounterSupport, self.storage
+        ).get_sliding_window(item.key_for(*identifiers), item.get_expiry())
+        remaining = max(
+            0,
+            item.amount
+            - self._weighted_count(
+                item, previous_count, previous_expires_in, current_count
+            ),
+        )
+        return WindowStats(time.time() + current_expires_in, remaining)
+
+
 class FixedWindowElasticExpiryRateLimiter(FixedWindowRateLimiter):
     """
     Reference: :ref:`strategies:fixed window with elastic expiry`
@@ -200,12 +318,14 @@ class FixedWindowElasticExpiryRateLimiter(FixedWindowRateLimiter):
 
 
 KnownStrategy = Union[
+    Type[SlidingWindowCounterRateLimiter],
     Type[FixedWindowRateLimiter],
     Type[FixedWindowElasticExpiryRateLimiter],
     Type[MovingWindowRateLimiter],
 ]
 
 STRATEGIES: Dict[str, KnownStrategy] = {
+    "sliding-window-counter": SlidingWindowCounterRateLimiter,
     "fixed-window": FixedWindowRateLimiter,
     "fixed-window-elastic-expiry": FixedWindowElasticExpiryRateLimiter,
     "moving-window": MovingWindowRateLimiter,

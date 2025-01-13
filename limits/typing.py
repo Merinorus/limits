@@ -4,6 +4,7 @@ from typing import (
     Awaitable,
     Callable,
     Dict,
+    Iterable,
     List,
     NamedTuple,
     Optional,
@@ -48,9 +49,15 @@ class EmcacheClientP(Protocol):
 
     async def get(self, key: bytes, return_flags: bool = False) -> Optional[ItemP]: ...
 
+    async def get_many(self, keys: Iterable[bytes]) -> dict[bytes, ItemP]: ...
+
     async def gets(self, key: bytes, return_flags: bool = False) -> Optional[ItemP]: ...
 
     async def increment(
+        self, key: bytes, value: int, *, noreply: bool = False
+    ) -> Optional[int]: ...
+
+    async def decrement(
         self, key: bytes, value: int, *, noreply: bool = False
     ) -> Optional[int]: ...
 
@@ -83,7 +90,20 @@ class MemcachedClientP(Protocol):
 
     def get(self, key: str, default: Optional[str] = None) -> bytes: ...
 
-    def incr(self, key: str, value: int, noreply: Optional[bool] = False) -> int: ...
+    def get_many(self, keys: Iterable[str]) -> dict[str, Any]: ...  # type:ignore[misc]
+
+    def incr(
+        self, key: str, value: int, noreply: Optional[bool] = False
+    ) -> Optional[int]: ...
+
+    def decr(
+        self,
+        key: str,
+        value: int,
+        # initial_value: int = 0,
+        # expiry: Optional[int] = 0,
+        noreply: Optional[bool] = False,
+    ) -> Optional[int]: ...
 
     def delete(self, key: str, noreply: Optional[bool] = None) -> Optional[bool]: ...
 
@@ -95,6 +115,13 @@ class MemcachedClientP(Protocol):
         noreply: Optional[bool] = None,
         flags: Optional[int] = None,
     ) -> bool: ...
+
+    def set_many(
+        self,
+        values: dict[str, Serializable],
+        expire: Optional[int],
+        noreply: Optional[bool] = None,
+    ) -> list[str]: ...
 
     def touch(
         self, key: str, expire: Optional[int] = 0, noreply: Optional[bool] = None
