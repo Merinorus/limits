@@ -188,26 +188,23 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
     ) -> bool:
         if amount > limit:
             return False
-        current_key = key
         previous_key = _previous_window_key(key)
-        current_ttl = self.get_ttl(current_key)
+        current_ttl = self.get_ttl(key)
         if current_ttl and current_ttl < expiry:
             self.clear(previous_key)
-            self.incr(
-                previous_key, current_ttl, amount=self.storage.get(current_key, 0)
-            )
-            self.clear(current_key)
+            self.incr(previous_key, current_ttl, amount=self.storage.get(key, 0))
+            self.clear(key)
             # The current window has been reset, just set the right expiration time
-            self.incr(current_key, expiry + current_ttl, amount=0)
+            self.incr(key, expiry + current_ttl, amount=0)
 
         weighted_count = self.get(previous_key) * self.get_ttl(
             previous_key
-        ) / expiry + self.get(current_key)
+        ) / expiry + self.get(key)
 
         if weighted_count + amount > limit:
             return False
 
-        self.incr(current_key, expiry * 2, amount=amount)
+        self.incr(key, expiry * 2, amount=amount)
         return True
 
     def get_sliding_window(

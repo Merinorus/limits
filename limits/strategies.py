@@ -288,7 +288,32 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
                 item, previous_count, previous_expires_in, current_count
             ),
         )
-        return WindowStats(time.time() + current_expires_in, remaining)
+        now = time.time()
+        if previous_count >= 1:
+            print(f"previous window = {previous_count}")
+            previous_window_reset_period = item.get_expiry() / (previous_count + 1)
+            print(f"previous reset window interval: {previous_window_reset_period}")
+            # reset = previous_window_reset_period - (now % previous_window_reset_period) + now
+            reset = (
+                min(
+                    previous_expires_in % previous_window_reset_period,
+                    current_expires_in % item.get_expiry(),
+                )
+                + now
+            )
+        else:
+            print("current window only")
+            reset = current_expires_in % item.get_expiry() + now
+        print(f"previous: {previous_count}")
+        print(f"current : {current_count}")
+        print(
+            f"weighted: {self._weighted_count(item, previous_count, previous_expires_in, current_count)}"
+        )
+        print(f"remaining: {remaining}")
+        print(f"previous expires in  : {previous_expires_in} s")
+        print(f"current expires in   : {current_expires_in} s")
+        print(f"rate limiter reset in: {reset - now} s")
+        return WindowStats(reset, remaining)
 
 
 class FixedWindowElasticExpiryRateLimiter(FixedWindowRateLimiter):

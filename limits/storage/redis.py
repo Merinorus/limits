@@ -194,7 +194,7 @@ class RedisInteractor:
         Contrary to other strategies that have one key per rate limit item,
         this strategy has two keys per rate limit item than must be on the same machine.
         To keep the current key and the previous key on the same Redis cluster node,
-        curvy braces are added.
+        curly braces are added.
 
         Eg: "{constructed_key}"
         """

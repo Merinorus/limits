@@ -1,8 +1,7 @@
 import time
 import urllib.parse
-from contextlib import asynccontextmanager
 from math import ceil
-from typing import AsyncGenerator, Iterable
+from typing import Iterable
 
 from deprecated.sphinx import versionadded
 
@@ -144,16 +143,9 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         storage = await self.get_storage()
         limit_key = key.encode("utf-8")
         expire_key = self._expiration_key(key).encode()
-        added = True
+        value = None
         try:
-            await storage.add(limit_key, f"{amount}".encode(), exptime=ceil(expiry))
-        except self.dependency.NotStoredStorageCommandError:
-            added = False
-            storage = await self.get_storage()
-
-        if not added:
             value = await storage.increment(limit_key, amount) or amount
-
             if elastic_expiry:
                 await storage.touch(limit_key, exptime=ceil(expiry))
                 await storage.set(
@@ -162,17 +154,32 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
                     exptime=ceil(expiry),
                     noreply=False,
                 )
-
             return value
-        else:
-            await storage.set(
-                expire_key,
-                str(expiry + time.time()).encode("utf-8"),
-                exptime=ceil(expiry),
-                noreply=False,
-            )
-
-        return amount
+        except self.dependency.NotFoundCommandError:
+            # Incrementation failed because the key doesn't exist
+            storage = await self.get_storage()
+            try:
+                await storage.add(limit_key, f"{amount}".encode(), exptime=ceil(expiry))
+                await storage.set(
+                    expire_key,
+                    str(expiry + time.time()).encode("utf-8"),
+                    exptime=ceil(expiry),
+                    noreply=False,
+                )
+                value = amount
+            except self.dependency.NotStoredStorageCommandError:
+                # Coult not add the key, probably because a concurrent call has added it
+                storage = await self.get_storage()
+                value = await storage.increment(limit_key, amount) or amount
+                if elastic_expiry:
+                    await storage.touch(limit_key, exptime=ceil(expiry))
+                    await storage.set(
+                        expire_key,
+                        str(expiry + time.time()).encode("utf-8"),
+                        exptime=ceil(expiry),
+                        noreply=False,
+                    )
+            return value
 
     async def get_expiry(self, key: str) -> float:
         """
@@ -223,73 +230,42 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
     async def reset(self) -> Optional[int]:
         raise NotImplementedError
 
-    def _key_lock_name(self, key: str) -> str:
-        return f"{key}/lock"
+    def _current_window_key(
+        self, key: str, expiry: int, now: Optional[float] = None
+    ) -> str:
+        if now is None:
+            now = time.time()
+        return f"{key}/{int(now / expiry)}"
 
-    async def __acquire_lock(self, key: str, limit_expiry: float) -> bool:
-        """
-        Lock acquisition on a specific memcached key. Non blocking (fail fast).
-        Return True if the lock was acquired, false otherwise.
-        """
-        # return self.storage.add(self._key_lock_name(key), 1, expire=ceil(limit_expiry * 2))
-
-        storage = await self.get_storage()
-        added = True
-        try:
-            await storage.add(
-                self._key_lock_name(key).encode("utf-8"),
-                bytes(1),
-                exptime=ceil(limit_expiry * 2),
-            )
-        except self.dependency.NotStoredStorageCommandError:
-            added = False
-        return added
-
-    async def __release_lock(self, key: str) -> None:
-        """Release the lock on a specific key. Ignore the result."""
-        storage = await self.get_storage()
-        await storage.delete(self._key_lock_name(key).encode("utf-8"))
-
-    @asynccontextmanager
-    async def _lock(self, key: str, limit_expiry: float) -> AsyncGenerator[None, None]:
-        if not await self.__acquire_lock(key, limit_expiry):
-            return  # Fail silently and exit the context if lock acquisition fails
-        try:
-            yield
-        finally:
-            await self.__release_lock(key)
+    def _previous_window_key(
+        self, key: str, expiry: int, now: Optional[float] = None
+    ) -> str:
+        if now is None:
+            now = time.time()
+        return f"{key}/{int((now - expiry) / expiry)}"
 
     async def acquire_sliding_window_entry(
         self,
-        previous_key: str,
-        current_key: str,
+        key: str,
         limit: int,
         expiry: int,
         amount: int = 1,
     ) -> bool:
+        now = time.time()
+        previous_key = self._previous_window_key(key, expiry, now)
+        current_key = self._current_window_key(key, expiry, now)
+
         if amount > limit:
             return False
+
         (
             previous_count,
             previous_ttl,
             current_count,
-            current_ttl,
-        ) = await self.get_sliding_window(previous_key, current_key)
-
-        if current_ttl > 0 and current_ttl < expiry:
-            # Current window expired, acquire lock and shift it to the previous window
-            async with self._lock(current_key, expiry):
-                # Extend the current counter expiry. Recreate it if it has just expired.
-                if not await self.touch(current_key, current_ttl + expiry):
-                    await self.incr(current_key, current_ttl + expiry, amount=0)
-
-                # Move the current window counter and expiry to the previous one
-                await self.set(previous_key, current_count, current_ttl)
-                storage = await self.get_storage()
-                current_count = (
-                    await storage.decrement(current_key.encode("utf-8"), current_count)
-                    or 0
-                )
+            _,
+        ) = await self._get_sliding_window_info(
+            previous_key, current_key, expiry, get_current_ttl=False
+        )
 
         weighted_count = previous_count * previous_ttl / expiry + current_count
         if weighted_count + amount > limit:
@@ -297,21 +273,35 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         else:
             # Hit, increase the current counter.
             # If the counter doesn't exist yet, set twice the theorical expiry.
-            await self.incr(current_key, expiry * 2, amount=amount)
+            await self.incr(current_key, expiry + ceil(now % expiry), amount=amount)
             return True
 
     async def get_sliding_window(
-        self, previous_key: str, current_key: str
+        self, key: str, expiry: Optional[int] = None
     ) -> tuple[int, float, int, float]:
-        result = await self.get_many(
-            [
-                previous_key,
-                self._expiration_key(previous_key),
-                current_key,
-                self._expiration_key(current_key),
-            ]
-        )
-        now = time.time()
+        if expiry is None:
+            raise ValueError("the expiry value is needed for this storage.")
+        current_key = self._current_window_key(key, expiry)
+        previous_key = self._previous_window_key(key, expiry)
+        return await self._get_sliding_window_info(previous_key, current_key, expiry)
+
+    async def _get_sliding_window_info(
+        self,
+        previous_key: str,
+        current_key: str,
+        expiry: Optional[int] = None,
+        get_current_ttl: bool = True,
+        now: Optional[float] = None,
+    ) -> tuple[int, float, int, float]:
+        if expiry is None:
+            raise ValueError("the expiry value is needed for this storage.")
+        if now is None:
+            now = time.time()
+        keys = [previous_key, self._expiration_key(previous_key), current_key]
+        if get_current_ttl:
+            keys.append(self._expiration_key(current_key))
+        result = await self.get_many(keys)
+
         raw_previous_count, raw_previous_ttl, raw_current_count, raw_current_ttl = (
             result.get(previous_key.encode("utf-8")),
             result.get(self._expiration_key(previous_key).encode("utf-8")),

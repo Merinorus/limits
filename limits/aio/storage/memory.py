@@ -20,6 +20,13 @@ class LockableEntry(asyncio.Lock):
         super().__init__()
 
 
+def _previous_window_key(key: str) -> str:
+    """
+    Return the previous window's storage key for the sliding window strategy.
+    """
+    return f"{key}/-1"
+
+
 @versionadded(version="2.1")
 class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
     """
@@ -184,37 +191,36 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
 
     async def acquire_sliding_window_entry(
         self,
-        previous_key: str,
-        current_key: str,
+        key: str,
         limit: int,
         expiry: int,
         amount: int = 1,
     ) -> bool:
+        previous_key = _previous_window_key(key)
+
         if amount > limit:
             return False
 
-        current_ttl = self.get_ttl(current_key)
+        current_ttl = self.get_ttl(key)
         if current_ttl and current_ttl < expiry:
             await self.clear(previous_key)
-            await self.incr(
-                previous_key, current_ttl, amount=self.storage.get(current_key, 0)
-            )
-            await self.clear(current_key)
+            await self.incr(previous_key, current_ttl, amount=self.storage.get(key, 0))
+            await self.clear(key)
             # The current window has been reset, just set the right expiration time
-            await self.incr(current_key, expiry + current_ttl, amount=0)
+            await self.incr(key, expiry + current_ttl, amount=0)
 
         weighted_count = await self.get(previous_key) * self.get_ttl(
             previous_key
-        ) / expiry + await self.get(current_key)
+        ) / expiry + await self.get(key)
 
         if weighted_count + amount > limit:
             return False
 
-        await self.incr(current_key, expiry * 2, amount=amount)
+        await self.incr(key, expiry * 2, amount=amount)
         return True
 
     async def get_sliding_window(
-        self, previous_key: str, current_key: str
+        self, key: str, expiry: Optional[int] = None
     ) -> Tuple[int, float, int, float]:
         """
         returns the starting point and the number of entries in the moving
@@ -224,11 +230,12 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
         :param expiry: expiry of entry
         :return: (start of window, number of acquired entries)
         """
+        previous_key = _previous_window_key(key)
         return (
             await self.get(previous_key),
             self.get_ttl(previous_key),
-            await self.get(current_key),
-            self.get_ttl(current_key),
+            await self.get(key),
+            self.get_ttl(key),
         )
 
     async def check(self) -> bool:

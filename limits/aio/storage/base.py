@@ -202,8 +202,7 @@ class SlidingWindowCounterSupport(ABC):
     @abstractmethod
     async def acquire_sliding_window_entry(
         self,
-        previous_key: str,
-        current_key: str,
+        key: str,
         limit: int,
         expiry: int,
         amount: int = 1,
@@ -220,7 +219,7 @@ class SlidingWindowCounterSupport(ABC):
 
     @abstractmethod
     async def get_sliding_window(
-        self, previous_key: str, current_key: str
+        self, key: str, expiry: Optional[int] = None
     ) -> tuple[int, float, int, float]:
         """
         Return the previous and current window information.

@@ -300,16 +300,6 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
     def _current_window_key(
         self, key: str, expiry: int, now: Optional[float] = None
     ) -> str:
-        """
-        Return the current window's storage key (Sliding window strategy)
-
-        Contrary to other strategies that have one key per rate limit item,
-        this strategy has two keys per rate limit item than must be on the same machine.
-        To keep the current key and the previous key on the same Redis cluster node,
-        curvy braces are added.
-
-        Eg: "{constructed_key}"
-        """
         if now is None:
             now = time.time()
         return f"{key}/{int(now / expiry)}"
@@ -317,14 +307,6 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
     def _previous_window_key(
         self, key: str, expiry: int, now: Optional[float] = None
     ) -> str:
-        """
-        Return the previous window's storage key (Sliding window strategy).
-
-        Curvy braces are added on the common pattern with the current window's key,
-        so the current and the previous key are stored on the same Redis cluster node.
-
-        Eg: "{constructed_key}/-1"
-        """
         if now is None:
             now = time.time()
         return f"{key}/{int((now - expiry) / expiry)}"
@@ -340,55 +322,62 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             return False
         now = time.time()
         current_key = self._current_window_key(key, expiry, now)
-        # previous_key = self._previous_window_key(key, expiry, now)
+        previous_key = self._previous_window_key(key, expiry, now)
+        print(f"previous key: {previous_key}")
+        print(f"current key : {current_key}")
         previous_count, previous_ttl, current_count, _ = self._get_sliding_window_info(
-            key, expiry, get_current_ttl=False
+            previous_key, current_key, expiry, get_current_ttl=False, now=now
         )
-
-        weighted_count = previous_count * previous_ttl / expiry + current_count
+        weighted_count = round(previous_count * previous_ttl / expiry + current_count)
+        print(f"memcached: weighted={weighted_count}")
         if weighted_count + amount > limit:
+            print("memcached: rate limiter exceeded")
             return False
         else:
             # Hit, increase the current counter.
             # If the counter doesn't exist yet, set twice the theorical expiry.
-            self.incr(current_key, expiry * 2, amount=amount)
+            # self.incr(current_key, expiry + ceil(now % expiry), amount=amount)
+            # self.incr(current_key, 2 * expiry + ceil(now % expiry), amount=amount)
+            self.incr(current_key, 2 * expiry, amount=amount)
             return True
 
     def get_sliding_window(
         self, key: str, expiry: Optional[int] = None
     ) -> tuple[int, float, int, float]:
-        return self._get_sliding_window_info(key, expiry)
-
-    def _get_sliding_window_info(
-        self, key: str, expiry: Optional[int] = None, get_current_ttl: bool = True
-    ) -> tuple[int, float, int, float]:
         if expiry is None:
             raise ValueError("the expiry value is needed for this storage.")
-
         now = time.time()
         current_key = self._current_window_key(key, expiry, now)
         previous_key = self._previous_window_key(key, expiry, now)
+        return self._get_sliding_window_info(previous_key, current_key, expiry)
+
+    def _get_sliding_window_info(
+        self,
+        previous_key: str,
+        current_key: str,
+        expiry: Optional[int] = None,
+        get_current_ttl: bool = True,
+        now: Optional[float] = None,
+    ) -> tuple[int, float, int, float]:
+        if expiry is None:
+            raise ValueError("the expiry value is needed for this storage.")
+        if now is None:
+            now = time.time()
+        keys = [previous_key, self._expiration_key(previous_key), current_key]
         if get_current_ttl:
-            result = self.get_many(
-                [
-                    previous_key,
-                    self._expiration_key(previous_key),
-                    current_key,
-                    self._expiration_key(current_key),
-                ]
-            )
-        else:
-            result = self.get_many(
-                [
-                    previous_key,
-                    self._expiration_key(previous_key),
-                    current_key,
-                ]
-            )
+            keys.append(self._expiration_key(current_key))
+        result = self.get_many(keys)
         previous_count, previous_ttl, current_count, current_ttl = (
             int(result.get(previous_key, 0)),
             self._ttl(result.get(self._expiration_key(previous_key))),
             int(result.get(current_key, 0)),
             self._ttl(result.get(self._expiration_key(current_key))),
         )
+        # previous_ttl = max(0, previous_ttl) % expiry
+        # current_ttl = min(current_ttl % expiry, expiry - (now % expiry))
+        if previous_count == 0:
+            previous_ttl = 0
+        else:
+            previous_ttl = (1 - (((now - expiry) / expiry) % 1)) * expiry
+        current_ttl = (1 - ((now / expiry) % 1)) * expiry + expiry
         return previous_count, previous_ttl, current_count, current_ttl
