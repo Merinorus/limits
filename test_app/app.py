@@ -4,12 +4,14 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from io import BytesIO
 
 # redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
 
-# limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="redis://localhost:7379/0")
+# limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", headers_enabled=True)
+limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="redis://localhost:7379/0", headers_enabled=True)
 # limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="memcached://localhost:22122")
-limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="memcached://localhost:22122", headers_enabled=True)
+# limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="memcached://localhost:22122", headers_enabled=True)
 
 # limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter")
 
@@ -97,20 +99,46 @@ def _my_rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) ->
 
 app = FastAPI()
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _my_rate_limit_exceeded_handler)
+# app.add_exception_handler(RateLimitExceeded, _my_rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+
+# # Note: the route decorator must be above the limit decorator, not below it
+# @app.get("/home")
+# @limiter.limit("3/10 second")
+# async def homepage(request: Request):
+#     response = PlainTextResponse("test")
+#     response = request.app.state.limiter._inject_headers(
+#         response, request.state.view_rate_limit
+#     )
+#     now = time.time()
+#     reset = float(response.headers.get("X-Ratelimit-Reset") or now)
+#     reset_in = reset - now
+#     remaining = response.headers.get("X-Ratelimit-Remaining")
+#     response = PlainTextResponse(f"Remaining: {remaining}. Ratelimiter reset in {reset_in} seconds")
+#     return response
 
 # Note: the route decorator must be above the limit decorator, not below it
 @app.get("/home")
 @limiter.limit("3/10 second")
+# @limiter.limit("1/1 second")
 async def homepage(request: Request):
     response = PlainTextResponse("test")
-    response = request.app.state.limiter._inject_headers(
-        response, request.state.view_rate_limit
-    )
-    now = time.time()
-    reset = float(response.headers.get("X-Ratelimit-Reset") or now)
-    reset_in = reset - now
-    remaining = response.headers.get("X-Ratelimit-Remaining")
-    response = PlainTextResponse(f"Remaining: {remaining}. Ratelimiter reset in {reset_in} seconds")
     return response
+
+@app.get("/favicon.ico")
+async def favicon(request: Request):
+    dummy_icon = (
+        b"\x00\x00\x01\x00"  # Header
+        b"\x01\x00\x10\x10"  # Image directory
+        b"\x01\x00\x04\x00"  # Color depth
+        b"\x00\x00\x00\x00\x00\x00\x16\x00"  # Reserved, offset
+        b"\x28\x00\x00\x00"  # Bitmap header
+        b"\x01\x00\x01\x00\x01\x00\x18\x00"  # Pixel dimensions
+        b"\x00\x00\x00\x00"  # Compression
+        b"\x00\x00\x00\x00"  # Size
+        b"\x00\x00\x00\x00"  # Horizontal/Vertical PPM
+        b"\x00\x00\x00\x00"  # Color table
+        b"\x00\x00\x00\x00\x00\x00\x00\x00"  # Pixel data
+    )
+    return Response(content=dummy_icon, media_type="image/x-icon")

@@ -4,6 +4,7 @@ Asynchronous rate limiting strategies
 
 import time
 from abc import ABC, abstractmethod
+from math import ceil
 from typing import cast
 
 from limits.aio.storage.base import SlidingWindowCounterSupport
@@ -207,13 +208,11 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         previous_count: int,
         previous_expires_in: float,
         current_count: int,
-    ) -> int:
+    ) -> float:
         """
         Return the approximated by weighting the previous window count and adding the current window count.
         """
-        return round(
-            previous_count * previous_expires_in / item.get_expiry() + current_count
-        )
+        return previous_count * previous_expires_in / item.get_expiry() + current_count
 
     async def hit(self, item: RateLimitItem, *identifiers: str, cost: int = 1) -> bool:
         """
@@ -277,8 +276,10 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         remaining = max(
             0,
             item.amount
-            - self._weighted_count(
-                item, previous_count, previous_expires_in, current_count
+            - ceil(
+                self._weighted_count(
+                    item, previous_count, previous_expires_in, current_count
+                )
             ),
         )
         return WindowStats(

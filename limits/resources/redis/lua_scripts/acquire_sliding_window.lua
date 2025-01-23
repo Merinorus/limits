@@ -28,7 +28,7 @@ end
 if current_ttl <= 0 then
     current_ttl = 0
 end
-local weighted_count = previous_count * previous_ttl / expiry + current_count
+local weighted_count = math.floor(previous_count * previous_ttl / expiry) + current_count
 
 if (weighted_count + amount) > limit then
     return false

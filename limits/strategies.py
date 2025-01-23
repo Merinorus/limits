@@ -4,6 +4,7 @@ Rate limiting strategies
 
 import time
 from abc import ABCMeta, abstractmethod
+from math import ceil
 from typing import Dict, Type, Union, cast
 
 from limits.storage.base import SlidingWindowCounterSupport
@@ -197,13 +198,11 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         previous_count: int,
         previous_expires_in: float,
         current_count: int,
-    ) -> int:
+    ) -> float:
         """
         Return the approximated by weighting the previous window count and adding the current window count.
         """
-        return round(
-            previous_count * previous_expires_in / item.get_expiry() + current_count
-        )
+        return previous_count * previous_expires_in / item.get_expiry() + current_count
 
     # def _current_key_for(self, item: RateLimitItem, *identifiers: str) -> str:
     #     """
@@ -238,6 +237,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :param cost: The cost of this hit, default 1
         """
+        print("HIT")
         return cast(
             SlidingWindowCounterSupport, self.storage
         ).acquire_sliding_window_entry(
@@ -256,7 +256,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :param cost: The expected cost to be consumed, default 1
         """
-
+        print("TEST")
         previous_count, previous_expires_in, current_count, _ = cast(
             SlidingWindowCounterSupport, self.storage
         ).get_sliding_window(item.key_for(*identifiers), item.get_expiry())
@@ -277,42 +277,93 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :return: (reset time, remaining)
         """
-
+        print("GET WINDOW STATS")
+        now = time.time()
         previous_count, previous_expires_in, current_count, current_expires_in = cast(
             SlidingWindowCounterSupport, self.storage
         ).get_sliding_window(item.key_for(*identifiers), item.get_expiry())
         remaining = max(
             0,
             item.amount
-            - self._weighted_count(
-                item, previous_count, previous_expires_in, current_count
+            - ceil(
+                self._weighted_count(
+                    item, previous_count, previous_expires_in, current_count
+                )
             ),
         )
-        now = time.time()
-        if previous_count >= 1:
-            print(f"previous window = {previous_count}")
-            previous_window_reset_period = item.get_expiry() / (previous_count + 1)
-            print(f"previous reset window interval: {previous_window_reset_period}")
-            # reset = previous_window_reset_period - (now % previous_window_reset_period) + now
-            reset = (
-                min(
-                    previous_expires_in % previous_window_reset_period,
-                    current_expires_in % item.get_expiry(),
-                )
-                + now
-            )
-        else:
-            print("current window only")
+
+        if previous_count >= 1 and current_count == 0:
+            # print("A")
+            previous_window_reset_period = item.get_expiry() / previous_count
+            # window_reset_half_period = window_reset_period / 2
+            # reset = window_reset_period - (now % window_reset_period) + now
+            # weighted_previous_count = (previous_count * previous_expires_in / item.get_expiry())
+            # print(f"weighted_previous_count: {weighted_previous_count}")
+            # print(f"window reset period: {window_reset_period} s")
+            # print(f"previous_expires_in: {previous_expires_in}")
+            # reset = previous_expires_in % window_reset_period + now
+            # reset = (previous_expires_in - window_reset_half_period) % window_reset_period + now
+            reset = previous_expires_in % previous_window_reset_period + now
+            # print(f"reset in: {reset - now} ")
+        elif previous_count >= 1 and current_count >= 1:
+            # print("B")
+            # print(f"weighted_count: {weighted_count}")
+            previous_window_reset_period = item.get_expiry() / previous_count
+            # previous_reset = previous_window_reset_period - (now % previous_window_reset_period) + now
+            previous_reset = previous_expires_in % previous_window_reset_period + now
+            current_reset = current_expires_in % item.get_expiry() + now
+            reset = min(previous_reset, current_reset)
+        elif previous_count == 0 and current_count >= 1:
+            # print("C")
+            # window_reset_period = item.get_expiry() / current_count
             reset = current_expires_in % item.get_expiry() + now
-        print(f"previous: {previous_count}")
-        print(f"current : {current_count}")
+        else:
+            # print("D")
+            # previous_count == 0 and current_count == 0
+            reset = now
+        # if previous_count >= 1:
+        #     # print(f"previous window = {previous_count}")
+        #     window_reset_period = item.get_expiry() / (previous_count + 1)
+        #     # print(f"previous reset window interval: {previous_window_reset_period}")
+        #     # reset = previous_window_reset_period - (now % previous_window_reset_period) + now
+        #     reset = (
+        #         min(
+        #             previous_expires_in % window_reset_period,
+        #             current_expires_in % item.get_expiry(),
+        #         )
+        #         + now
+        #     )
+        # else:
+        #     # print("current window only")
+        #     reset = current_expires_in % item.get_expiry() + now
+        #     if current_count >= 1:
+        #         window_reset_period = item.get_expiry() / (current_count + 1)
+        #         reset = reset + window_reset_period
+        # reset = current_expires_in % item.get_expiry() + now
+
+        # if previous_count >= 1:
+        #     window_reset_period = item.get_expiry() / (previous_count + 1)
+        #     reset = (
+        #         min(
+        #             previous_expires_in % window_reset_period,
+        #             current_expires_in % item.get_expiry(),
+        #         )
+        #         + now
+        #     )
+        # if current_count >= 1:
+        #     window_reset_period = item.get_expiry() / (current_count + 1)
+        #     reset = reset + window_reset_period
+
+        print(f"previous count: {previous_count}")
+        print(f"current  count: {current_count}")
         print(
-            f"weighted: {self._weighted_count(item, previous_count, previous_expires_in, current_count)}"
+            f"weighted count: {self._weighted_count(item, previous_count, previous_expires_in, current_count)}"
         )
-        print(f"remaining: {remaining}")
+        print(f"remaining     : {remaining}")
         print(f"previous expires in  : {previous_expires_in} s")
         print(f"current expires in   : {current_expires_in} s")
         print(f"rate limiter reset in: {reset - now} s")
+        # print(f"rate limiter reset ts: {reset} (timestamp in seconds since epoch)")
         return WindowStats(reset, remaining)
 
 

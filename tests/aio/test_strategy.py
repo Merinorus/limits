@@ -1,4 +1,5 @@
 import time
+from math import ceil
 
 import pytest
 
@@ -142,24 +143,28 @@ class TestAsyncWindow:
         )
 
     @async_sliding_window_counter_storage
+    @async_fixed_start
     async def test_sliding_window_counter_stats(self, uri, args, fixture):
         storage = storage_from_string(uri, **args)
         limiter = SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerMinute(2)
+        if "memcached" in uri:
+            next_second_from_now = ceil(time.time())
         assert await limiter.hit(limit, "key")
         time.sleep(1)
         assert await limiter.hit(limit, "key")
         time.sleep(1)
         assert not await limiter.hit(limit, "key")
         assert (await limiter.get_window_stats(limit, "key")).remaining == 0
-        # TODO Check. Doesn't work with memcached implementation
         if "memcached" in uri:
+            # With memcached, the reset time is periodic according to the worker's timestamp
+            reset_time = (await limiter.get_window_stats(limit, "key")).reset_time
             expected_reset = int(
-                limit.get_expiry() - (time.time() % limit.get_expiry())
+                limit.get_expiry() - (next_second_from_now % limit.get_expiry())
             )
-            assert (
-                await limiter.get_window_stats(limit, "key")
-            ).reset_time - time.time() == pytest.approx(expected_reset, 1e-2)
+            assert reset_time - next_second_from_now == pytest.approx(
+                expected_reset, abs=1e-2
+            )
         else:
             assert (
                 await limiter.get_window_stats(limit, "key")

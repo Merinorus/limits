@@ -1,6 +1,7 @@
 import threading
 import time
 from collections import Counter
+from math import floor
 
 import limits.typing
 from limits.storage.base import (
@@ -201,7 +202,7 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
             previous_key
         ) / expiry + self.get(key)
 
-        if weighted_count + amount > limit:
+        if floor(weighted_count) + amount > limit:
             return False
 
         self.incr(key, expiry * 2, amount=amount)

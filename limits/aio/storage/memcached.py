@@ -1,6 +1,6 @@
 import time
 import urllib.parse
-from math import ceil
+from math import ceil, floor
 from typing import Iterable
 
 from deprecated.sphinx import versionadded
@@ -128,8 +128,28 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             )
         return succeed
 
+    async def decr(self, key: str, amount: int = 1) -> int:
+        """
+        Decrement the counter for a given rate limit key. Return 0 if the key doesn't exist.
+
+        :param key: the key to decrement
+        :param amount: the number to decrement by
+        """
+        storage = await self.get_storage()
+        limit_key = key.encode("utf-8")
+        try:
+            value = await storage.decrement(limit_key, amount) or 0
+        except self.dependency.NotFoundCommandError:
+            value = 0
+        return value
+
     async def incr(
-        self, key: str, expiry: float, elastic_expiry: bool = False, amount: int = 1
+        self,
+        key: str,
+        expiry: float,
+        elastic_expiry: bool = False,
+        amount: int = 1,
+        set_expiration_key: bool = True,
     ) -> int:
         """
         increments the counter for a given rate limit key
@@ -148,24 +168,26 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             value = await storage.increment(limit_key, amount) or amount
             if elastic_expiry:
                 await storage.touch(limit_key, exptime=ceil(expiry))
-                await storage.set(
-                    expire_key,
-                    str(expiry + time.time()).encode("utf-8"),
-                    exptime=ceil(expiry),
-                    noreply=False,
-                )
+                if set_expiration_key:
+                    await storage.set(
+                        expire_key,
+                        str(expiry + time.time()).encode("utf-8"),
+                        exptime=ceil(expiry),
+                        noreply=False,
+                    )
             return value
         except self.dependency.NotFoundCommandError:
             # Incrementation failed because the key doesn't exist
             storage = await self.get_storage()
             try:
                 await storage.add(limit_key, f"{amount}".encode(), exptime=ceil(expiry))
-                await storage.set(
-                    expire_key,
-                    str(expiry + time.time()).encode("utf-8"),
-                    exptime=ceil(expiry),
-                    noreply=False,
-                )
+                if set_expiration_key:
+                    await storage.set(
+                        expire_key,
+                        str(expiry + time.time()).encode("utf-8"),
+                        exptime=ceil(expiry),
+                        noreply=False,
+                    )
                 value = amount
             except self.dependency.NotStoredStorageCommandError:
                 # Coult not add the key, probably because a concurrent call has added it
@@ -173,12 +195,13 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
                 value = await storage.increment(limit_key, amount) or amount
                 if elastic_expiry:
                     await storage.touch(limit_key, exptime=ceil(expiry))
-                    await storage.set(
-                        expire_key,
-                        str(expiry + time.time()).encode("utf-8"),
-                        exptime=ceil(expiry),
-                        noreply=False,
-                    )
+                    if set_expiration_key:
+                        await storage.set(
+                            expire_key,
+                            str(expiry + time.time()).encode("utf-8"),
+                            exptime=ceil(expiry),
+                            noreply=False,
+                        )
             return value
 
     async def get_expiry(self, key: str) -> float:
@@ -263,17 +286,26 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             previous_ttl,
             current_count,
             _,
-        ) = await self._get_sliding_window_info(
-            previous_key, current_key, expiry, get_current_ttl=False
-        )
+        ) = await self._get_sliding_window_info(previous_key, current_key, expiry)
 
         weighted_count = previous_count * previous_ttl / expiry + current_count
-        if weighted_count + amount > limit:
+        if floor(weighted_count) + amount > limit:
             return False
         else:
             # Hit, increase the current counter.
             # If the counter doesn't exist yet, set twice the theorical expiry.
-            await self.incr(current_key, expiry + ceil(now % expiry), amount=amount)
+            current_count = await self.incr(
+                current_key, 2 * expiry, amount=amount, set_expiration_key=False
+            )
+            actualised_previous_ttl = min(0, previous_ttl - (time.time() - now))
+            weighted_count = (
+                previous_count * actualised_previous_ttl / expiry + current_count
+            )
+            if floor(weighted_count) > limit:
+                # Another hit won the race condition: revert the incrementation and refuse this hit
+                # Limitation: during high concurrency at the end of the window,
+                # the counter is shifted and cannot be decremented, so less requests than expected are allowed.
+                await self.decr(current_key, amount)
             return True
 
     async def get_sliding_window(
@@ -290,30 +322,44 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         previous_key: str,
         current_key: str,
         expiry: Optional[int] = None,
-        get_current_ttl: bool = True,
         now: Optional[float] = None,
     ) -> tuple[int, float, int, float]:
         if expiry is None:
             raise ValueError("the expiry value is needed for this storage.")
         if now is None:
             now = time.time()
-        keys = [previous_key, self._expiration_key(previous_key), current_key]
-        if get_current_ttl:
-            keys.append(self._expiration_key(current_key))
-        result = await self.get_many(keys)
 
-        raw_previous_count, raw_previous_ttl, raw_current_count, raw_current_ttl = (
-            result.get(previous_key.encode("utf-8")),
-            result.get(self._expiration_key(previous_key).encode("utf-8")),
-            result.get(current_key.encode("utf-8")),
-            result.get(self._expiration_key(current_key).encode("utf-8")),
-        )
+        # keys = [previous_key, self._expiration_key(previous_key), current_key]
+        # if get_current_ttl:
+        #     keys.append(self._expiration_key(current_key))
+
+        result = await self.get_many([previous_key, current_key])
+
+        # raw_previous_count, raw_previous_ttl, raw_current_count, raw_current_ttl = (
+        #     result.get(previous_key.encode("utf-8")),
+        #     result.get(self._expiration_key(previous_key).encode("utf-8")),
+        #     result.get(current_key.encode("utf-8")),
+        #     result.get(self._expiration_key(current_key).encode("utf-8")),
+        # )
+
+        raw_previous_count = result.get(previous_key.encode("utf-8"))
+        previous_count = raw_previous_count and int(raw_previous_count.value) or 0
+        raw_current_count = result.get(current_key.encode("utf-8"))
+        current_count = raw_current_count and int(raw_current_count.value) or 0
+
         current_count = raw_current_count and int(raw_current_count.value) or 0
         previous_count = raw_previous_count and int(raw_previous_count.value) or 0
-        current_ttl = self._ttl(
-            raw_current_ttl and float(raw_current_ttl.value) or now, now
-        )
-        previous_ttl = self._ttl(
-            raw_previous_ttl and float(raw_previous_ttl.value) or now, now
-        )
+
+        if previous_count == 0:
+            previous_ttl = float(0)
+        else:
+            previous_ttl = (1 - (((now - expiry) / expiry) % 1)) * expiry
+        current_ttl = (1 - ((now / expiry) % 1)) * expiry + expiry
+
+        # current_ttl = self._ttl(
+        #     raw_current_ttl and float(raw_current_ttl.value) or now, now
+        # )
+        # previous_ttl = self._ttl(
+        #     raw_previous_ttl and float(raw_previous_ttl.value) or now, now
+        # )
         return previous_count, previous_ttl, current_count, current_ttl
