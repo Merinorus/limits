@@ -20,6 +20,8 @@ from tests.utils import (
     fixed_start,
     moving_window_storage,
     sliding_window_counter_storage,
+    sliding_window_counter_timestamp_based_key,
+    timestamp_based_key_ttl,
     window,
 )
 
@@ -100,12 +102,11 @@ class TestWindow:
 
     @sliding_window_counter_storage
     @fixed_start
-    # @wait_until_next(2)
     def test_sliding_window_counter(self, uri, args, fixture):
         storage = storage_from_string(uri, **args)
         limiter = SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerSecond(10, 2)
-        if "memcached" in uri:
+        if sliding_window_counter_timestamp_based_key(uri):
             next_second_from_now = ceil(time.time())
             if next_second_from_now % 2 == 0:
                 # Next second is even, so the curent one is odd.
@@ -116,8 +117,8 @@ class TestWindow:
             assert all([limiter.hit(limit) for _ in range(0, 10)])
         assert not limiter.hit(limit)
         assert limiter.get_window_stats(limit).remaining == 0
-        if "memcached" in uri:
-            # With memcached, the reset time is periodic according to the worker's timestamp
+        if sliding_window_counter_timestamp_based_key(uri):
+            # If the key is timestamp-based, the reset time is periodic according to the worker's timestamp
             reset_time = limiter.get_window_stats(limit).reset_time
             expected_reset = int(
                 limit.get_expiry() - (next_second_from_now % limit.get_expiry())
@@ -147,6 +148,11 @@ class TestWindow:
         storage = storage_from_string(uri, **args)
         limiter = SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerMinute(10, 2)
+        if sliding_window_counter_timestamp_based_key(uri):
+            # Avoid testing the behaviour when the window is about to be reset
+            ttl = timestamp_based_key_ttl(limit)
+            if ttl < 0.5:
+                time.sleep(ttl)
         assert not limiter.hit(limit, "k1", cost=11)
         assert limiter.hit(limit, "k2", cost=5)
         assert limiter.get_window_stats(limit, "k2").remaining == 5

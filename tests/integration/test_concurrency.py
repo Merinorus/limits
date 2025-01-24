@@ -15,8 +15,10 @@ from tests.utils import (
     async_all_storage,
     async_moving_window_storage,
     async_sliding_window_counter_storage,
+    async_sliding_window_counter_timestamp_based_key,
     moving_window_storage,
     sliding_window_counter_storage,
+    timestamp_based_key_ttl,
 )
 
 
@@ -117,6 +119,11 @@ class TestAsyncConcurrency:
         storage = storage_from_string(uri, **args)
         limiter = limits.aio.strategies.SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerMinute(5)
+        if async_sliding_window_counter_timestamp_based_key(uri):
+            # Avoid testing the behaviour when the window is about to be reset
+            ttl = timestamp_based_key_ttl(limit)
+            if ttl < 0.5:
+                time.sleep(ttl)
 
         [await limiter.hit(limit, uuid4().hex) for _ in range(50)]
 

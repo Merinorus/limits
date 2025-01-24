@@ -21,7 +21,9 @@ from tests.utils import (
     async_fixed_start,
     async_moving_window_storage,
     async_sliding_window_counter_storage,
+    async_sliding_window_counter_timestamp_based_key,
     async_window,
+    timestamp_based_key_ttl,
 )
 
 
@@ -123,6 +125,11 @@ class TestAsyncWindow:
         storage = storage_from_string(uri, **args)
         limiter = SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerSecond(10, 2)
+        if async_sliding_window_counter_timestamp_based_key(uri):
+            # Avoid testing the behaviour when the window is about to be reset
+            ttl = timestamp_based_key_ttl(limit)
+            if ttl < 0.5:
+                time.sleep(ttl)
         async with async_window(1) as (start, _):
             assert all([await limiter.hit(limit) for _ in range(0, 10)])
         assert not await limiter.hit(limit)
@@ -148,7 +155,7 @@ class TestAsyncWindow:
         storage = storage_from_string(uri, **args)
         limiter = SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerMinute(2)
-        if "memcached" in uri:
+        if async_sliding_window_counter_timestamp_based_key(uri):
             next_second_from_now = ceil(time.time())
         assert await limiter.hit(limit, "key")
         time.sleep(1)
@@ -156,8 +163,9 @@ class TestAsyncWindow:
         time.sleep(1)
         assert not await limiter.hit(limit, "key")
         assert (await limiter.get_window_stats(limit, "key")).remaining == 0
-        if "memcached" in uri:
-            # With memcached, the reset time is periodic according to the worker's timestamp
+        if async_sliding_window_counter_timestamp_based_key(uri):
+            # With timestamp-based key implementation,
+            # the reset time is periodic according to the worker's timestamp
             reset_time = (await limiter.get_window_stats(limit, "key")).reset_time
             expected_reset = int(
                 limit.get_expiry() - (next_second_from_now % limit.get_expiry())
@@ -176,6 +184,11 @@ class TestAsyncWindow:
         storage = storage_from_string(uri, **args)
         limiter = SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerMinute(10, 2)
+        if async_sliding_window_counter_timestamp_based_key(uri):
+            # Avoid testing the behaviour when the window is about to be reset
+            ttl = timestamp_based_key_ttl(limit)
+            if ttl < 0.5:
+                time.sleep(ttl)
         assert not await limiter.hit(limit, "k1", cost=11)
         assert await limiter.hit(limit, "k2", cost=5)
         assert (await limiter.get_window_stats(limit, "k2")).remaining == 5

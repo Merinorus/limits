@@ -8,6 +8,8 @@ from typing import Optional
 import pytest
 from pytest_lazy_fixtures import lf
 
+from limits.limits import RateLimitItem
+
 
 def fixed_start(fn):
     @functools.wraps(fn)
@@ -43,6 +45,31 @@ def wait_until_next(period: int = 1):
         return wrapper
 
     return decorator
+
+
+def timestamp_based_key_ttl(item: RateLimitItem, now: Optional[float] = None) -> float:
+    """
+    Return the current timestamp-based key TTL.
+
+    Used for some implementations of thesliding window counter that generates keys based on the timestamp.
+
+    Args:
+        item (RateLimitItem): the rate limit item
+        now (Optional[float], optional): the current timestamp. If None, generates the current timestamp
+    """
+    if now is None:
+        now = time.time()
+    return item.get_expiry() - (now % item.get_expiry())
+
+
+def sliding_window_counter_timestamp_based_key(uri: str):
+    """Return if the current sliding window counter implementation has a timestamp-based key."""
+    return "memcached" in uri
+
+
+def async_sliding_window_counter_timestamp_based_key(uri: str):
+    """Return if the current sliding window counter implementation has a timestamp-based key."""
+    return any(["memcached" in uri, "memory" in uri])
 
 
 def async_fixed_start(fn):
