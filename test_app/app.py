@@ -1,15 +1,20 @@
 import time
+
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-from io import BytesIO
 
 # redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
 
 # limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", headers_enabled=True)
-limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="redis://localhost:7379/0", headers_enabled=True)
+limiter = Limiter(
+    key_func=get_remote_address,
+    strategy="sliding-window-counter",
+    storage_uri="redis://localhost:7379/0",
+    headers_enabled=True,
+)
 # limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="memcached://localhost:22122")
 # limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter", storage_uri="memcached://localhost:22122", headers_enabled=True)
 
@@ -68,7 +73,10 @@ limiter = Limiter(key_func=get_remote_address, strategy="sliding-window-counter"
 #                     raise
 #         return response
 
-def _my_rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Response:
+
+def _my_rate_limit_exceeded_handler(
+    request: Request, exc: RateLimitExceeded
+) -> Response:
     """
     Build a simple JSON response that includes the details of the rate limit
     that was hit. If no limit is hit, the countdown is added to headers.
@@ -85,9 +93,13 @@ def _my_rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) ->
     reset = float(response.headers.get("X-Ratelimit-Reset") or now)
     reset_in = reset - now
     remaining = response.headers.get("X-Ratelimit-Remaining")
-    
+
     response = JSONResponse(
-        {"error": f"Rate limit exceeded: {exc.detail}", "reset in": f"{reset_in}", "remaining": remaining}
+        {
+            "error": f"Rate limit exceeded: {exc.detail}",
+            "reset in": f"{reset_in}",
+            "remaining": remaining,
+        }
         # {}
         # {"error": f"Rate limit exceeded: {exc.detail}", "details": {"Reset in": f"{time.time() - request.app.state.limiter.limiter.get_window_stats().reset_time} seconds", "Remaining": request.app.state.limiter.limiter.get_window_stats().remaining}}, status_code=429
     )
@@ -97,11 +109,11 @@ def _my_rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) ->
     )
     return response
 
+
 app = FastAPI()
 app.state.limiter = limiter
 # app.add_exception_handler(RateLimitExceeded, _my_rate_limit_exceeded_handler)
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore
 
 # # Note: the route decorator must be above the limit decorator, not below it
 # @app.get("/home")
@@ -118,6 +130,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 #     response = PlainTextResponse(f"Remaining: {remaining}. Ratelimiter reset in {reset_in} seconds")
 #     return response
 
+
 # Note: the route decorator must be above the limit decorator, not below it
 @app.get("/home")
 @limiter.limit("3/10 second")
@@ -125,6 +138,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 async def homepage(request: Request):
     response = PlainTextResponse("test")
     return response
+
 
 @app.get("/favicon.ico")
 async def favicon(request: Request):
