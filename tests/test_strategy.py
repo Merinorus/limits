@@ -1,4 +1,5 @@
 import time
+from math import ceil
 
 import pytest
 
@@ -99,17 +100,35 @@ class TestWindow:
 
     @sliding_window_counter_storage
     @fixed_start
+    # @wait_until_next(2)
     def test_sliding_window_counter(self, uri, args, fixture):
         storage = storage_from_string(uri, **args)
         limiter = SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerSecond(10, 2)
+        if "memcached" in uri:
+            next_second_from_now = ceil(time.time())
+            if next_second_from_now % 2 == 0:
+                # Next second is even, so the curent one is odd.
+                # Must wait a full period for memcached.
+                time.sleep(1)
+                next_second_from_now = ceil(time.time())
         with window(1) as (start, end):
             assert all([limiter.hit(limit) for _ in range(0, 10)])
         assert not limiter.hit(limit)
         assert limiter.get_window_stats(limit).remaining == 0
-        assert limiter.get_window_stats(limit).reset_time == pytest.approx(
-            start + 2, 1e-2
-        )
+        if "memcached" in uri:
+            # With memcached, the reset time is periodic according to the worker's timestamp
+            reset_time = limiter.get_window_stats(limit).reset_time
+            expected_reset = int(
+                limit.get_expiry() - (next_second_from_now % limit.get_expiry())
+            )
+            assert reset_time - next_second_from_now == pytest.approx(
+                expected_reset, abs=1e-2
+            )
+        else:
+            assert limiter.get_window_stats(limit).reset_time == pytest.approx(
+                start + 2, 1e-2
+            )
 
     @sliding_window_counter_storage
     @fixed_start

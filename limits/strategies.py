@@ -237,7 +237,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :param cost: The cost of this hit, default 1
         """
-        print("HIT")
+        # print("HIT")
         return cast(
             SlidingWindowCounterSupport, self.storage
         ).acquire_sliding_window_entry(
@@ -256,7 +256,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :param cost: The expected cost to be consumed, default 1
         """
-        print("TEST")
+        # print("TEST")
         previous_count, previous_expires_in, current_count, _ = cast(
             SlidingWindowCounterSupport, self.storage
         ).get_sliding_window(item.key_for(*identifiers), item.get_expiry())
@@ -277,7 +277,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
          instance of the limit
         :return: (reset time, remaining)
         """
-        print("GET WINDOW STATS")
+        # print("GET WINDOW STATS")
         now = time.time()
         previous_count, previous_expires_in, current_count, current_expires_in = cast(
             SlidingWindowCounterSupport, self.storage
@@ -354,15 +354,15 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         #     window_reset_period = item.get_expiry() / (current_count + 1)
         #     reset = reset + window_reset_period
 
-        print(f"previous count: {previous_count}")
-        print(f"current  count: {current_count}")
-        print(
-            f"weighted count: {self._weighted_count(item, previous_count, previous_expires_in, current_count)}"
-        )
-        print(f"remaining     : {remaining}")
-        print(f"previous expires in  : {previous_expires_in} s")
-        print(f"current expires in   : {current_expires_in} s")
-        print(f"rate limiter reset in: {reset - now} s")
+        # print(f"previous count: {previous_count}")
+        # print(f"current  count: {current_count}")
+        # print(
+        #     f"weighted count: {self._weighted_count(item, previous_count, previous_expires_in, current_count)}"
+        # )
+        # print(f"remaining     : {remaining}")
+        # print(f"previous expires in  : {previous_expires_in} s")
+        # print(f"current expires in   : {current_expires_in} s")
+        # print(f"rate limiter reset in: {reset - now} s")
         # print(f"rate limiter reset ts: {reset} (timestamp in seconds since epoch)")
         return WindowStats(reset, remaining)
 

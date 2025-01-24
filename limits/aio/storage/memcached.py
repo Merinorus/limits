@@ -274,19 +274,17 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         expiry: int,
         amount: int = 1,
     ) -> bool:
+        if amount > limit:
+            return False
         now = time.time()
         previous_key = self._previous_window_key(key, expiry, now)
         current_key = self._current_window_key(key, expiry, now)
-
-        if amount > limit:
-            return False
-
         (
             previous_count,
             previous_ttl,
             current_count,
             _,
-        ) = await self._get_sliding_window_info(previous_key, current_key, expiry)
+        ) = await self._get_sliding_window_info(previous_key, current_key, expiry, now)
 
         weighted_count = previous_count * previous_ttl / expiry + current_count
         if floor(weighted_count) + amount > limit:
@@ -313,9 +311,12 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
     ) -> tuple[int, float, int, float]:
         if expiry is None:
             raise ValueError("the expiry value is needed for this storage.")
-        current_key = self._current_window_key(key, expiry)
-        previous_key = self._previous_window_key(key, expiry)
-        return await self._get_sliding_window_info(previous_key, current_key, expiry)
+        now = time.time()
+        previous_key = self._previous_window_key(key, expiry, now)
+        current_key = self._current_window_key(key, expiry, now)
+        return await self._get_sliding_window_info(
+            previous_key, current_key, expiry, now
+        )
 
     async def _get_sliding_window_info(
         self,
@@ -329,18 +330,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         if now is None:
             now = time.time()
 
-        # keys = [previous_key, self._expiration_key(previous_key), current_key]
-        # if get_current_ttl:
-        #     keys.append(self._expiration_key(current_key))
-
         result = await self.get_many([previous_key, current_key])
-
-        # raw_previous_count, raw_previous_ttl, raw_current_count, raw_current_ttl = (
-        #     result.get(previous_key.encode("utf-8")),
-        #     result.get(self._expiration_key(previous_key).encode("utf-8")),
-        #     result.get(current_key.encode("utf-8")),
-        #     result.get(self._expiration_key(current_key).encode("utf-8")),
-        # )
 
         raw_previous_count = result.get(previous_key.encode("utf-8"))
         previous_count = raw_previous_count and int(raw_previous_count.value) or 0
@@ -356,10 +346,4 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             previous_ttl = (1 - (((now - expiry) / expiry) % 1)) * expiry
         current_ttl = (1 - ((now / expiry) % 1)) * expiry + expiry
 
-        # current_ttl = self._ttl(
-        #     raw_current_ttl and float(raw_current_ttl.value) or now, now
-        # )
-        # previous_ttl = self._ttl(
-        #     raw_previous_ttl and float(raw_previous_ttl.value) or now, now
-        # )
         return previous_count, previous_ttl, current_count, current_ttl

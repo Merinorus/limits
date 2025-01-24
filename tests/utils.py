@@ -22,6 +22,29 @@ def fixed_start(fn):
     return __inner
 
 
+def wait_until_next(period: int = 1):
+    """
+    A decorator to wait until the timestamp is rounded to the next period.
+
+    Args:
+        period (int): The period in seconds to round the timestamp to. Defaults to 1 second.
+    """
+
+    def decorator(fb):
+        @functools.wraps(fb)
+        def wrapper(*a, **k):
+            current_time = time.time()
+            next_time = ((current_time // period) + 1) * period
+            wait_time = next_time - current_time
+            if wait_time > 0:
+                time.sleep(wait_time)
+            return fb(*a, **k)
+
+        return wrapper
+
+    return decorator
+
+
 def async_fixed_start(fn):
     @functools.wraps(fn)
     async def __inner(*a, **k):
