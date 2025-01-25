@@ -304,6 +304,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
                 # Limitation: during high concurrency at the end of the window,
                 # the counter is shifted and cannot be decremented, so less requests than expected are allowed.
                 await self.decr(current_key, amount)
+                return False
             return True
 
     async def get_sliding_window(

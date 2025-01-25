@@ -52,17 +52,17 @@ class TestConcurrency:
         limiter = limits.strategies.SlidingWindowCounterRateLimiter(storage)
         limit = RateLimitItemPerMinute(5)
 
-        [limiter.hit(limit, uuid4().hex) for _ in range(50)]
+        [limiter.hit(limit, uuid4().hex) for _ in range(100)]
 
         key = uuid4().hex
         hits = []
 
         def hit():
-            time.sleep(random.random())
+            time.sleep(random.random() / 1000)
             if limiter.hit(limit, key):
                 hits.append(None)
 
-        threads = [threading.Thread(target=hit) for _ in range(50)]
+        threads = [threading.Thread(target=hit) for _ in range(100)]
         [t.start() for t in threads]
         [t.join() for t in threads]
 
@@ -122,20 +122,18 @@ class TestAsyncConcurrency:
         if async_sliding_window_counter_timestamp_based_key(uri):
             # Avoid testing the behaviour when the window is about to be reset
             ttl = timestamp_based_key_ttl(limit)
-            if ttl < 0.5:
+            if ttl < 1:
                 time.sleep(ttl)
-
-        [await limiter.hit(limit, uuid4().hex) for _ in range(50)]
 
         key = uuid4().hex
         hits = []
 
         async def hit():
-            await asyncio.sleep(random.random())
+            await asyncio.sleep(random.random() / 1000)
             if await limiter.hit(limit, key):
                 hits.append(None)
 
-        await asyncio.gather(*[hit() for _ in range(50)])
+        await asyncio.gather(*[hit() for _ in range(100)])
 
         assert len(hits) == 5
 
