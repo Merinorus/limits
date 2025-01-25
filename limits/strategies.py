@@ -4,7 +4,7 @@ Rate limiting strategies
 
 import time
 from abc import ABCMeta, abstractmethod
-from math import ceil
+from math import floor
 from typing import Dict, Type, Union, cast
 
 from limits.storage.base import SlidingWindowCounterSupport
@@ -278,23 +278,25 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         :return: (reset time, remaining)
         """
         # print("GET WINDOW STATS")
-        now = time.time()
+
         previous_count, previous_expires_in, current_count, current_expires_in = cast(
             SlidingWindowCounterSupport, self.storage
         ).get_sliding_window(item.key_for(*identifiers), item.get_expiry())
         remaining = max(
             0,
             item.amount
-            - ceil(
+            - floor(
                 self._weighted_count(
                     item, previous_count, previous_expires_in, current_count
                 )
             ),
         )
-
+        now = time.time()
+        # print(f"previous = {previous_count}, current = {current_count}")
         if previous_count >= 1 and current_count == 0:
             # print("A")
             previous_window_reset_period = item.get_expiry() / previous_count
+            # print(f"previous_window_reset_period={previous_window_reset_period}")
             # window_reset_half_period = window_reset_period / 2
             # reset = window_reset_period - (now % window_reset_period) + now
             # weighted_previous_count = (previous_count * previous_expires_in / item.get_expiry())
@@ -310,6 +312,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
             # print(f"weighted_count: {weighted_count}")
             previous_window_reset_period = item.get_expiry() / previous_count
             # previous_reset = previous_window_reset_period - (now % previous_window_reset_period) + now
+            # Previous window will reset before the current one
             previous_reset = previous_expires_in % previous_window_reset_period + now
             current_reset = current_expires_in % item.get_expiry() + now
             reset = min(previous_reset, current_reset)
@@ -317,6 +320,7 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
             # print("C")
             # window_reset_period = item.get_expiry() / current_count
             reset = current_expires_in % item.get_expiry() + now
+            # print(f"reset in: {reset - time.time()} s")
         else:
             # print("D")
             # previous_count == 0 and current_count == 0

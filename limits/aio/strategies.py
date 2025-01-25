@@ -4,7 +4,7 @@ Asynchronous rate limiting strategies
 
 import time
 from abc import ABC, abstractmethod
-from math import ceil
+from math import floor
 from typing import cast
 
 from limits.aio.storage.base import SlidingWindowCounterSupport
@@ -276,15 +276,50 @@ class SlidingWindowCounterRateLimiter(RateLimiter):
         remaining = max(
             0,
             item.amount
-            - ceil(
+            - floor(
                 self._weighted_count(
                     item, previous_count, previous_expires_in, current_count
                 )
             ),
         )
-        return WindowStats(
-            time.time() + current_expires_in - item.get_expiry(), remaining
-        )
+        now = time.time()
+        if previous_count >= 1 and current_count == 0:
+            # print("A")
+            previous_window_reset_period = item.get_expiry() / previous_count
+            # print(f"previous_window_reset_period={previous_window_reset_period}")
+            # window_reset_half_period = window_reset_period / 2
+            # reset = window_reset_period - (now % window_reset_period) + now
+            # weighted_previous_count = (previous_count * previous_expires_in / item.get_expiry())
+            # print(f"weighted_previous_count: {weighted_previous_count}")
+            # print(f"window reset period: {window_reset_period} s")
+            # print(f"previous_expires_in: {previous_expires_in}")
+            # reset = previous_expires_in % window_reset_period + now
+            # reset = (previous_expires_in - window_reset_half_period) % window_reset_period + now
+            reset = previous_expires_in % previous_window_reset_period + now
+            # print(f"reset in: {reset - now} ")
+        elif previous_count >= 1 and current_count >= 1:
+            # print("B")
+            # print(f"weighted_count: {weighted_count}")
+            previous_window_reset_period = item.get_expiry() / previous_count
+            # previous_reset = previous_window_reset_period - (now % previous_window_reset_period) + now
+            # Previous window will reset before the current one
+            previous_reset = previous_expires_in % previous_window_reset_period + now
+            current_reset = current_expires_in % item.get_expiry() + now
+            reset = min(previous_reset, current_reset)
+        elif previous_count == 0 and current_count >= 1:
+            # print("C")
+            # window_reset_period = item.get_expiry() / current_count
+            reset = current_expires_in % item.get_expiry() + now
+            # print(f"reset in: {reset - time.time()} s")
+        else:
+            # print("D")
+            # previous_count == 0 and current_count == 0
+            reset = now
+
+        return WindowStats(reset, remaining)
+        # return WindowStats(
+        #     time.time() + current_expires_in - item.get_expiry(), remaining
+        # )
 
 
 class FixedWindowElasticExpiryRateLimiter(FixedWindowRateLimiter):

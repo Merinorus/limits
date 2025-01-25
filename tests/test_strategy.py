@@ -132,6 +132,86 @@ class TestWindow:
             )
 
     @sliding_window_counter_storage
+    def test_sliding_window_counter_current_window(self, uri, args, fixture):
+        """Check the window stats when only the current window is filled"""
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerHour(2, 24)
+        if sliding_window_counter_timestamp_based_key(uri):
+            # Avoid testing the behaviour when the window is about to be reset
+            ttl = timestamp_based_key_ttl(limit)
+            if ttl < 0.5:
+                time.sleep(ttl)
+        assert limiter.hit(limit)
+        now = time.time()
+        if sliding_window_counter_timestamp_based_key(uri):
+            expected_reset_time = now + timestamp_based_key_ttl(limit, now)
+        else:
+            expected_reset_time = now + 24 * 3600
+        assert limiter.get_window_stats(limit).reset_time == pytest.approx(
+            expected_reset_time, 1e-2
+        )
+        assert limiter.get_window_stats(limit).remaining == 1
+        assert limiter.hit(limit)
+        assert not limiter.hit(limit)
+
+    @sliding_window_counter_storage
+    @pytest.mark.flaky(max_runs=3)
+    def test_sliding_window_counter_previous_window(self, uri, args, fixture):
+        """Check the window stats when the previous window is partially filled"""
+        storage = storage_from_string(uri, **args)
+        limiter = SlidingWindowCounterRateLimiter(storage)
+        limit = RateLimitItemPerSecond(5, 1)
+        sleep_margin = 0.001
+        if sliding_window_counter_timestamp_based_key(uri):
+            # Avoid testing the behaviour when the window is about to be reset
+            ttl = timestamp_based_key_ttl(limit)
+            if ttl < 0.3:
+                time.sleep(ttl + sleep_margin)
+        previous_window_hits = 3
+        for i in range(previous_window_hits):
+            limiter.hit(limit)
+        now = time.time()
+        # Check the stats: only the current window is filled
+        assert limiter.get_window_stats(limit).remaining == 2
+        if sliding_window_counter_timestamp_based_key(uri):
+            expected_reset_time = now + timestamp_based_key_ttl(limit, now)
+        else:
+            expected_reset_time = now + 1
+        assert limiter.get_window_stats(limit).reset_time == pytest.approx(
+            expected_reset_time, 1e-2
+        )
+        # Wait for the next window
+        sleep_time = expected_reset_time - time.time() + sleep_margin
+        time.sleep(sleep_time)
+        # A new hit should be available immediately after window shift
+        # The limiter should reset in a fraction of a period, according to how many hits are in the previous window
+        reset_time = limiter.get_window_stats(limit).reset_time
+        reset_in = reset_time - time.time()
+        assert reset_in == pytest.approx(
+            limit.get_expiry() / previous_window_hits, abs=0.03
+        )
+        assert limiter.get_window_stats(limit).remaining == 3
+        assert limiter.hit(limit)
+        assert limiter.hit(limit)
+        for i in range(previous_window_hits):
+            # A new item hit should be freed by the previous window
+            t0 = time.time()
+            assert limiter.get_window_stats(limit).remaining == 1
+            assert limiter.hit(limit)
+            assert limiter.get_window_stats(limit).remaining == 0
+            assert not limiter.hit(limit)
+            # The previous window has 4 hits. The reset time should be in a 1/4 of the window expiry
+            reset_time = limiter.get_window_stats(limit).reset_time
+            t1 = time.time()
+            reset_in = reset_time - time.time()
+            assert reset_in == pytest.approx(
+                limit.get_expiry() / previous_window_hits - (t1 - t0), abs=0.03
+            )
+            # Wait for the next hit available
+            time.sleep(reset_in + sleep_margin)
+
+    @sliding_window_counter_storage
     @fixed_start
     def test_sliding_window_counter_empty_stats(self, uri, args, fixture):
         storage = storage_from_string(uri, **args)

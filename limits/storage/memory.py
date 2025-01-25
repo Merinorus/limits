@@ -180,6 +180,25 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
 
         return timestamp, acquired
 
+    def _shift_window_if_expired(
+        self, previous_key: str, current_key: str, current_ttl: float, expiry: int
+    ) -> bool:
+        """
+        Shift the window only if the current window expired.
+
+        Return true if the window has been shifted, false otherwise.
+        """
+        if current_ttl and current_ttl < expiry:
+            self.clear(previous_key)
+            self.incr(
+                previous_key, current_ttl, amount=self.storage.get(current_key, 0)
+            )
+            self.clear(current_key)
+            # The current window has been reset, just set the right expiration time
+            self.incr(current_key, expiry + current_ttl, amount=0)
+            return True
+        return False
+
     def acquire_sliding_window_entry(
         self,
         key: str,
@@ -191,12 +210,13 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
             return False
         previous_key = _previous_window_key(key)
         current_ttl = self.get_ttl(key)
-        if current_ttl and current_ttl < expiry:
-            self.clear(previous_key)
-            self.incr(previous_key, current_ttl, amount=self.storage.get(key, 0))
-            self.clear(key)
-            # The current window has been reset, just set the right expiration time
-            self.incr(key, expiry + current_ttl, amount=0)
+        # if current_ttl and current_ttl < expiry:
+        #     self.clear(previous_key)
+        #     self.incr(previous_key, current_ttl, amount=self.storage.get(key, 0))
+        #     self.clear(key)
+        #     # The current window has been reset, just set the right expiration time
+        #     self.incr(key, expiry + current_ttl, amount=0)
+        self._shift_window_if_expired(previous_key, key, current_ttl, expiry)
 
         weighted_count = self.get(previous_key) * self.get_ttl(
             previous_key
@@ -219,13 +239,27 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
         :param expiry: expiry of entry
         :return: (start of window, number of acquired entries)
         """
-        _previous_window_key
-        return (
+        if expiry is None:
+            raise ValueError("the expiry value is needed for this storage.")
+        previous_counter, previous_ttl, current_counter, current_ttl = (
             self.get(_previous_window_key(key)),
             self.get_ttl(_previous_window_key(key)),
             self.get(key),
             self.get_ttl(key),
         )
+
+        if self._shift_window_if_expired(
+            _previous_window_key(key), key, current_ttl, expiry
+        ):
+            # If the window has shifted, fetch the latest data
+            previous_counter, previous_ttl, current_counter, current_ttl = (
+                self.get(_previous_window_key(key)),
+                self.get_ttl(_previous_window_key(key)),
+                self.get(key),
+                self.get_ttl(key),
+            )
+
+        return previous_counter, previous_ttl, current_counter, current_ttl
 
     def check(self) -> bool:
         """

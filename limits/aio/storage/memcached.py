@@ -329,7 +329,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             raise ValueError("the expiry value is needed for this storage.")
         if now is None:
             now = time.time()
-
+        t0 = time.time()
         result = await self.get_many([previous_key, current_key])
 
         raw_previous_count = result.get(previous_key.encode("utf-8"))
@@ -339,11 +339,11 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
 
         current_count = raw_current_count and int(raw_current_count.value) or 0
         previous_count = raw_previous_count and int(raw_previous_count.value) or 0
-
+        t1 = time.time()
         if previous_count == 0:
             previous_ttl = float(0)
         else:
-            previous_ttl = (1 - (((now - expiry) / expiry) % 1)) * expiry
-        current_ttl = (1 - ((now / expiry) % 1)) * expiry + expiry
+            previous_ttl = (1 - (((now - (t1 - t0) - expiry) / expiry) % 1)) * expiry
+        current_ttl = (1 - ((now - (t1 - t0) / expiry) % 1)) * expiry + expiry
 
         return previous_count, previous_ttl, current_count, current_ttl

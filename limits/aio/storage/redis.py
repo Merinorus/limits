@@ -116,10 +116,14 @@ class RedisInteractor:
         :param expiry: expiry of entry
         :return: (start of window, number of acquired entries)
         """
+        if expiry is None:
+            raise ValueError("the expiry value is needed for this storage.")
         previous_key = self.prefixed_key(self._previous_window_key(key))
         current_key = self.prefixed_key(self._current_window_key(key))
 
-        window = await self.lua_sliding_window.execute([previous_key, current_key], [])
+        window = await self.lua_sliding_window.execute(
+            [previous_key, current_key], [expiry]
+        )
         if window:
             previous_count, previous_expires_in, current_count, current_expires_in = (
                 int(window[0] or 0),  # type: ignore
