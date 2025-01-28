@@ -64,7 +64,7 @@ def timestamp_based_key_ttl(item: RateLimitItem, now: Optional[float] = None) ->
 
 def sliding_window_counter_timestamp_based_key(uri: str):
     """Return if the current sliding window counter implementation has a timestamp-based key."""
-    return "memcached" in uri
+    return any(["memcached" in uri, "memory" in uri])
 
 
 def async_sliding_window_counter_timestamp_based_key(uri: str):

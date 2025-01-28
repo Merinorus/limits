@@ -19,11 +19,16 @@ class LockableEntry(threading._RLock):  # type: ignore
         super().__init__()
 
 
-def _previous_window_key(key: str) -> str:
-    """
-    Return the previous window's storage key for the sliding window strategy.
-    """
-    return f"{key}/-1"
+def _current_window_key(key: str, expiry: int, now: Optional[float] = None) -> str:
+    if now is None:
+        now = time.time()
+    return f"{key}/{int(now / expiry)}"
+
+
+def _previous_window_key(key: str, expiry: int, now: Optional[float] = None) -> str:
+    if now is None:
+        now = time.time()
+    return f"{key}/{int((now - expiry) / expiry)}"
 
 
 class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
@@ -87,6 +92,19 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
 
         if elastic_expiry or self.storage[key] == amount:
             self.expirations[key] = time.time() + expiry
+
+        return self.storage.get(key, 0)
+
+    def decr(self, key: str, amount: int = 1) -> int:
+        """
+        decrements the counter for a given rate limit key
+
+        :param key: the key to decrement
+        :param amount: the number to decrement by
+        """
+        self.get(key)
+        self.__schedule_expiry()
+        self.storage[key] = max(self.storage[key] - amount, 0)
 
         return self.storage.get(key, 0)
 
@@ -180,25 +198,6 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
 
         return timestamp, acquired
 
-    def _shift_window_if_expired(
-        self, previous_key: str, current_key: str, current_ttl: float, expiry: int
-    ) -> bool:
-        """
-        Shift the window only if the current window expired.
-
-        Return true if the window has been shifted, false otherwise.
-        """
-        if current_ttl and current_ttl < expiry:
-            self.clear(previous_key)
-            self.incr(
-                previous_key, current_ttl, amount=self.storage.get(current_key, 0)
-            )
-            self.clear(current_key)
-            # The current window has been reset, just set the right expiration time
-            self.incr(current_key, expiry + current_ttl, amount=0)
-            return True
-        return False
-
     def acquire_sliding_window_entry(
         self,
         key: str,
@@ -208,25 +207,52 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
     ) -> bool:
         if amount > limit:
             return False
-        previous_key = _previous_window_key(key)
-        current_ttl = self.get_ttl(key)
-        # if current_ttl and current_ttl < expiry:
-        #     self.clear(previous_key)
-        #     self.incr(previous_key, current_ttl, amount=self.storage.get(key, 0))
-        #     self.clear(key)
-        #     # The current window has been reset, just set the right expiration time
-        #     self.incr(key, expiry + current_ttl, amount=0)
-        self._shift_window_if_expired(previous_key, key, current_ttl, expiry)
-
-        weighted_count = self.get(previous_key) * self.get_ttl(
-            previous_key
-        ) / expiry + self.get(key)
-
+        now = time.time()
+        previous_key = _previous_window_key(key, expiry, now)
+        current_key = _current_window_key(key, expiry, now)
+        (
+            previous_count,
+            previous_ttl,
+            current_count,
+            _,
+        ) = self._get_sliding_window_info(previous_key, current_key, expiry, now)
+        weighted_count = previous_count * previous_ttl / expiry + current_count
         if floor(weighted_count) + amount > limit:
             return False
+        else:
+            # Hit, increase the current counter.
+            # If the counter doesn't exist yet, set twice the theorical expiry.
+            current_count = self.incr(current_key, 2 * expiry, amount=amount)
+            weighted_count = previous_count * previous_ttl / expiry + current_count
+            if floor(weighted_count) > limit:
+                # Another hit won the race condition: revert the incrementation and refuse this hit
+                # Limitation: during high concurrency at the end of the window,
+                # the counter is shifted and cannot be decremented, so less requests than expected are allowed.
+                self.decr(current_key, amount)
+                # print("Concurrent call, reverting the counter increase")
+                return False
+            return True
 
-        self.incr(key, expiry * 2, amount=amount)
-        return True
+    def _get_sliding_window_info(
+        self,
+        previous_key: str,
+        current_key: str,
+        expiry: Optional[int] = None,
+        now: Optional[float] = None,
+    ) -> tuple[int, float, int, float]:
+        if expiry is None:
+            raise ValueError("the expiry value is needed for this storage.")
+        if now is None:
+            now = time.time()
+
+        previous_count = self.get(previous_key)
+        current_count = self.get(current_key)
+        if previous_count == 0:
+            previous_ttl = float(0)
+        else:
+            previous_ttl = (1 - (((now - expiry) / expiry) % 1)) * expiry
+        current_ttl = (1 - ((now / expiry) % 1)) * expiry + expiry
+        return previous_count, previous_ttl, current_count, current_ttl
 
     def get_sliding_window(
         self, key: str, expiry: Optional[int] = None
@@ -241,25 +267,10 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
         """
         if expiry is None:
             raise ValueError("the expiry value is needed for this storage.")
-        previous_counter, previous_ttl, current_counter, current_ttl = (
-            self.get(_previous_window_key(key)),
-            self.get_ttl(_previous_window_key(key)),
-            self.get(key),
-            self.get_ttl(key),
-        )
-
-        if self._shift_window_if_expired(
-            _previous_window_key(key), key, current_ttl, expiry
-        ):
-            # If the window has shifted, fetch the latest data
-            previous_counter, previous_ttl, current_counter, current_ttl = (
-                self.get(_previous_window_key(key)),
-                self.get_ttl(_previous_window_key(key)),
-                self.get(key),
-                self.get_ttl(key),
-            )
-
-        return previous_counter, previous_ttl, current_counter, current_ttl
+        now = time.time()
+        previous_key = _previous_window_key(key, expiry, now)
+        current_key = _current_window_key(key, expiry, now)
+        return self._get_sliding_window_info(previous_key, current_key, expiry, now)
 
     def check(self) -> bool:
         """

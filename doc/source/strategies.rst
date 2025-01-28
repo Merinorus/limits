@@ -77,4 +77,4 @@ especially if the counter is very low. This burst is observed only at the first 
 Eg: with "1 / day", the attacker can send one request at 23:59:59 and another at 00:00:00.
 However, the subsequent requests will be rate-limited once a day, since the previous window is full.
 
-The following storage implementations are affected: memcached, in-memory (async version only).
+The following storage implementations are affected: memcached and in-memory.

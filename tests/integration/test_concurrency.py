@@ -141,9 +141,7 @@ class TestAsyncConcurrency:
 
     @async_sliding_window_counter_storage
     @pytest.mark.flaky(max_runs=3)
-    async def test_sliding_window_counter_shift(
-        self, async_add_backend_latency, uri, args, fixture
-    ):
+    async def test_sliding_window_counter_shift(self, uri, args, fixture):
         """Check that the window is shifted only once under high concurrency"""
         storage = storage_from_string(uri, **args)
         limiter = limits.aio.strategies.SlidingWindowCounterRateLimiter(storage)
