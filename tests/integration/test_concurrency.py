@@ -2,13 +2,15 @@ import asyncio
 import random
 import threading
 import time
+from math import ceil
 from uuid import uuid4
 
 import pytest
 
+import limits.aio.storage.memory
 import limits.aio.strategies
 import limits.strategies
-from limits.limits import RateLimitItemPerMinute
+from limits.limits import RateLimitItemPerMinute, RateLimitItemPerSecond
 from limits.storage import storage_from_string
 from tests.utils import (
     all_storage,
@@ -136,6 +138,75 @@ class TestAsyncConcurrency:
         await asyncio.gather(*[hit() for _ in range(100)])
 
         assert len(hits) == 5
+
+    @async_sliding_window_counter_storage
+    @pytest.mark.flaky(max_runs=3)
+    async def test_sliding_window_counter_shift(
+        self, async_add_backend_latency, uri, args, fixture
+    ):
+        """Check that the window is shifted only once under high concurrency"""
+        storage = storage_from_string(uri, **args)
+        limiter = limits.aio.strategies.SlidingWindowCounterRateLimiter(storage)
+        limiter_amount = 20
+        limiter_seconds = 2
+        limit = RateLimitItemPerSecond(limiter_amount, limiter_seconds)
+        if async_sliding_window_counter_timestamp_based_key(uri):
+            # Avoid testing the behaviour when the window is about to be reset
+            ttl = timestamp_based_key_ttl(limit)
+            if ttl < 0.5:
+                time.sleep(ttl)
+
+        key = uuid4().hex
+        hits = []
+
+        async def hit():
+            await asyncio.sleep(random.random() / 1000)
+            if await limiter.hit(limit, key):
+                hits.append(None)
+
+        async def get_window_stats():
+            await asyncio.sleep(random.random() / 1000)
+            await limiter.get_window_stats(limit, key)
+
+        await asyncio.gather(*[hit() for _ in range(limiter_amount)])
+        assert len(hits) == limiter_amount
+        assert (await limiter.get_window_stats(limit, key)).remaining == 0
+
+        reset_time = (await limiter.get_window_stats(limit, key)).reset_time
+        print(f"reset in: {reset_time - time.time()}")
+        offset_before_reset = 0.01
+        print("sleeping...")
+        time.sleep(reset_time - time.time() - offset_before_reset)
+        reset_time = (await limiter.get_window_stats(limit, key)).reset_time
+        print(f"reset in: {reset_time - time.time()}")
+        # await asyncio.gather(*[get_window_stats() for _ in range(500)], *[hit() for _ in range(500)])
+        await asyncio.gather(
+            *[get_window_stats() for _ in range(20)], *[hit() for _ in range(20)]
+        )
+        # If the window has shifted, only one more hit should be allowed
+        t1 = time.time()
+        elapsed_time_since_reset = t1 - reset_time
+        print(f"Elapsed time since reset: {elapsed_time_since_reset}")
+        if elapsed_time_since_reset % (limiter_seconds / limiter_amount) <= 0.01:
+            # If the previous window has just moved to the next subperiod,
+            # the limiter might be not hit enough
+            additional_hit = await hit()
+            print(
+                "Test finished too close to a subwindow period reset. Trying one more hit"
+            )
+            print(f"Additional hit: {additional_hit}")
+            t1 = time.time()
+        additional_hits = ceil((t1 - reset_time) / (limiter_seconds / limiter_amount))
+        print(f"expected additional hits: {additional_hits}")
+        if len(hits) < limiter_amount + additional_hits:
+            # One hit might be missing depending on how close to a subperiod the test finishes
+            missing_hits = limiter_amount + additional_hits - len(hits)
+            await asyncio.gather(*[hit() for _ in range(missing_hits)])
+            print(f"{missing_hits} hits were missing")
+        assert (
+            len(hits) == limiter_amount + additional_hits
+            or len(hits) == limiter_amount + additional_hits - 1
+        )
 
     @async_moving_window_storage
     async def test_moving_window(self, uri, args, fixture):

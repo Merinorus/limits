@@ -115,7 +115,6 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
         """
         :param key: the key to get the counter value for
         """
-
         if self.expirations.get(key, 0) <= time.time():
             self.storage.pop(key, None)
             self.expirations.pop(key, None)
@@ -225,7 +224,6 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
             current_count,
             _,
         ) = await self._get_sliding_window_info(previous_key, current_key, expiry, now)
-
         weighted_count = previous_count * previous_ttl / expiry + current_count
         if floor(weighted_count) + amount > limit:
             return False
@@ -233,15 +231,14 @@ class MemoryStorage(Storage, MovingWindowSupport, SlidingWindowCounterSupport):
             # Hit, increase the current counter.
             # If the counter doesn't exist yet, set twice the theorical expiry.
             current_count = await self.incr(current_key, 2 * expiry, amount=amount)
-            actualised_previous_ttl = min(0, previous_ttl - (time.time() - now))
-            weighted_count = (
-                previous_count * actualised_previous_ttl / expiry + current_count
-            )
+            weighted_count = previous_count * previous_ttl / expiry + current_count
             if floor(weighted_count) > limit:
                 # Another hit won the race condition: revert the incrementation and refuse this hit
                 # Limitation: during high concurrency at the end of the window,
                 # the counter is shifted and cannot be decremented, so less requests than expected are allowed.
                 await self.decr(current_key, amount)
+                # print("Concurrent call, reverting the counter increase")
+                return False
             return True
 
     async def get_sliding_window(

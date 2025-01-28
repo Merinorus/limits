@@ -72,7 +72,6 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         """
         :param key: the key to get the counter value for
         """
-
         item = await (await self.get_storage()).get(key.encode("utf-8"))
 
         return item and int(item.value) or 0
@@ -285,7 +284,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             current_count,
             _,
         ) = await self._get_sliding_window_info(previous_key, current_key, expiry, now)
-
+        t0 = time.time()
         weighted_count = previous_count * previous_ttl / expiry + current_count
         if floor(weighted_count) + amount > limit:
             return False
@@ -295,7 +294,8 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             current_count = await self.incr(
                 current_key, 2 * expiry, amount=amount, set_expiration_key=False
             )
-            actualised_previous_ttl = min(0, previous_ttl - (time.time() - now))
+            t1 = time.time()
+            actualised_previous_ttl = max(0, previous_ttl - (t1 - t0))
             weighted_count = (
                 previous_count * actualised_previous_ttl / expiry + current_count
             )
@@ -330,7 +330,6 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             raise ValueError("the expiry value is needed for this storage.")
         if now is None:
             now = time.time()
-        t0 = time.time()
         result = await self.get_many([previous_key, current_key])
 
         raw_previous_count = result.get(previous_key.encode("utf-8"))
@@ -340,11 +339,10 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
 
         current_count = raw_current_count and int(raw_current_count.value) or 0
         previous_count = raw_previous_count and int(raw_previous_count.value) or 0
-        t1 = time.time()
         if previous_count == 0:
             previous_ttl = float(0)
         else:
-            previous_ttl = (1 - (((now - (t1 - t0) - expiry) / expiry) % 1)) * expiry
-        current_ttl = (1 - ((now - (t1 - t0) / expiry) % 1)) * expiry + expiry
+            previous_ttl = (1 - (((now - expiry) / expiry) % 1)) * expiry
+        current_ttl = (1 - ((now / expiry) % 1)) * expiry + expiry
 
         return previous_count, previous_ttl, current_count, current_ttl
