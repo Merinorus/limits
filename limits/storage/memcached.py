@@ -352,7 +352,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
                     self.storage.decr,
                     current_key,
                     amount,
-                    noreply=False,
+                    noreply=True,
                 )
                 return False
             return True

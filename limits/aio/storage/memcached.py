@@ -127,9 +127,10 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
             )
         return succeed
 
-    async def decr(self, key: str, amount: int = 1) -> int:
+    async def decr(self, key: str, amount: int = 1, noreply: bool = False) -> int:
         """
-        Decrement the counter for a given rate limit key. Return 0 if the key doesn't exist.
+        Decrement the counter for a given rate limit key.
+        Return 0 if the key doesn't exist or if noreply is set to True.
 
         :param key: the key to decrement
         :param amount: the number to decrement by
@@ -137,7 +138,7 @@ class MemcachedStorage(Storage, SlidingWindowCounterSupport):
         storage = await self.get_storage()
         limit_key = key.encode("utf-8")
         try:
-            value = await storage.decrement(limit_key, amount) or 0
+            value = await storage.decrement(limit_key, amount, noreply=noreply) or 0
         except self.dependency.NotFoundCommandError:
             value = 0
         return value
